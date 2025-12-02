@@ -4,7 +4,7 @@
 
 <br>
 <div align="center">
-  <a href="#更新日志"><img src="https://img.shields.io/badge/VERSION-v1.2.2-E91E63?style=for-the-badge" alt="Version"></a>
+  <a href="#更新日志"><img src="https://img.shields.io/badge/VERSION-v1.3.0-E91E63?style=for-the-badge" alt="Version"></a>
   <a href="https://github.com/Soulter/AstrBot"><img src="https://img.shields.io/badge/AstrBot-Compatible-00BFA5?style=for-the-badge&logo=robot&logoColor=white" alt="AstrBot Compatible"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/PYTHON-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"></a>
   <a href="https://pypi.org/project/pydouyu/"><img src="https://img.shields.io/badge/PYDOUYU-Required-9C27B0?style=for-the-badge" alt="pydouyu"></a>
@@ -20,6 +20,8 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 - **订阅推送**：用户可自主订阅/取消订阅，精准推送到群/私聊
 - **@全体成员**：支持开播时自动 @全体成员（可选）
 - **礼物播报**：支持直播间礼物实时播报，可过滤低价值礼物
+- **下播通知**：自动推送下播提醒并附带当次直播时长
+- **抗抖动机制**：内置状态冷却、重试与自动恢复，避免重复或漏报
 - **自动获取主播名**：添加房间时自动从斗鱼获取主播名称
 - **数据持久化**：监控与订阅数据自动保存，重启不丢失
 - **权限控制**：添加/删除直播间需管理员权限
@@ -140,6 +142,19 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 用户: 土豪用户
 礼物: 火箭 x1
 时间: 20:30:45
+```
+
+### 下播通知
+
+```
+斗鱼直播下播通知
+━━━━━━━━━━━━━━
+主播: 某主播
+房间号: 12725169
+本次直播时长: 45分钟
+下播时间: 2025-12-02 21:02:53
+━━━━━━━━━━━━━━
+感谢观看，下次再见！
 ```
 
 ## 数据存储

@@ -1,5 +1,5 @@
 name: astrbot_plugin_douyu_live
 desc: 斗鱼直播开播通知插件，支持监控多个直播间并推送开播消息
 author: GEMILUXVII
-version: 1.2.2
+version: 1.3.0
 repo: "https://github.com/GEMILUXVII/astrbot_plugin_douyu_live"
