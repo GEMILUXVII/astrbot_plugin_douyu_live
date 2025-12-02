@@ -143,7 +143,7 @@ class Main(star.Star):
         """加载持久化数据"""
         if os.path.exists(self.data_file):
             try:
-                with open(self.data_file, "r", encoding="utf-8") as f:
+                with open(self.data_file, encoding="utf-8") as f:
                     data = json.load(f)
                     # 将字符串键转为整数
                     self.subscriptions = {
@@ -288,7 +288,7 @@ class Main(star.Star):
             )
         else:
             del self.room_info[room_id]
-            yield event.plain_result(f"❌ 启动监控失败，请检查房间号是否正确")
+            yield event.plain_result("❌ 启动监控失败，请检查房间号是否正确")
 
     @douyu.command("del")
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -397,7 +397,7 @@ class Main(star.Star):
             return
 
         yield event.plain_result(
-            f"📋 你的订阅列表\n━━━━━━━━━━━━━━\n" + "\n".join(my_subs)
+            "📋 你的订阅列表\n━━━━━━━━━━━━━━\n" + "\n".join(my_subs)
         )
 
     @douyu.command("status")
