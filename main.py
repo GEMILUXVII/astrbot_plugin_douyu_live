@@ -81,6 +81,7 @@ class Main(star.Star):
             room_id,
             live_callback=self._on_live_start,
             gift_callback=self._on_gift,
+            offline_callback=self._on_live_end,
         )
         if monitor.start():
             self.monitors[room_id] = monitor
@@ -166,6 +167,33 @@ class Main(star.Star):
             )
         else:
             logger.error("事件循环不可用，无法发送礼物通知")
+
+    def _on_live_end(self, room_id: int, duration_seconds: float) -> None:
+        """下播回调 - 发送下播通知给所有订阅者
+
+        Args:
+            room_id: 房间号
+            duration_seconds: 直播时长（秒）
+        """
+        subscribers = self.data.get_subscribers(room_id)
+        if not subscribers:
+            return
+
+        room_info = self.data.get_room(room_id)
+        room_name = room_info.name if room_info else f"房间{room_id}"
+
+        notification = self.notifier.build_offline_notification(
+            room_id, room_name, duration_seconds
+        )
+
+        # 异步发送通知（从子线程调度到主事件循环）
+        if self.loop and self.loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self.notifier.send_to_subscribers(subscribers, notification, at_all=False),
+                self.loop,
+            )
+        else:
+            logger.error("事件循环不可用，无法发送下播通知")
 
     # ==================== 命令组 ====================
 
