@@ -18,19 +18,26 @@ except ImportError:
 class DouyuMonitor:
     """斗鱼直播监控器
     
-    使用 pydouyu 库监控指定直播间的开播状态，
-    当检测到开播时通过回调函数通知上层。
+    使用 pydouyu 库监控指定直播间的开播状态和礼物消息，
+    当检测到开播或收到礼物时通过回调函数通知上层。
     """
 
-    def __init__(self, room_id: int, callback: Callable[[int, dict], None]):
+    def __init__(
+        self,
+        room_id: int,
+        live_callback: Callable[[int, dict], None] | None = None,
+        gift_callback: Callable[[int, dict], None] | None = None,
+    ):
         """初始化监控器
         
         Args:
             room_id: 斗鱼直播间房间号
-            callback: 开播回调函数，参数为 (room_id, msg)
+            live_callback: 开播回调函数，参数为 (room_id, msg)
+            gift_callback: 礼物回调函数，参数为 (room_id, msg)
         """
         self.room_id = room_id
-        self.callback = callback
+        self.live_callback = live_callback
+        self.gift_callback = gift_callback
         self.client = None
         self.running = False
         self.thread: Thread | None = None
@@ -51,17 +58,40 @@ class DouyuMonitor:
             if is_live and not self.last_live_status:
                 # 从未开播变为开播，触发通知
                 logger.info(f"斗鱼直播间 {self.room_id} 开播了!")
-                self.callback(self.room_id, msg)
+                if self.live_callback:
+                    self.live_callback(self.room_id, msg)
 
             self.last_live_status = is_live
         except Exception as e:
             logger.error(f"处理直播状态时出错: {e}")
 
+    def _dgb_handler(self, msg: dict) -> None:
+        """处理礼物消息
+        
+        Args:
+            msg: pydouyu 的 dgb 礼物消息
+            
+        消息字段说明：
+            - nn: 用户昵称
+            - uid: 用户 ID
+            - gfid: 礼物 ID
+            - gfcnt / hits: 礼物数量
+            - level: 用户等级
+        """
+        try:
+            if self.gift_callback:
+                self.gift_callback(self.room_id, msg)
+        except Exception as e:
+            logger.error(f"处理礼物消息时出错: {e}")
+
     def _run_client(self) -> None:
         """在线程中运行客户端"""
         try:
             self.client = Client(room_id=self.room_id)
+            # 注册直播状态处理器
             self.client.add_handler("rss", self._rss_handler)
+            # 注册礼物消息处理器
+            self.client.add_handler("dgb", self._dgb_handler)
             self.running = True
             self.client.start()
         except Exception as e:
