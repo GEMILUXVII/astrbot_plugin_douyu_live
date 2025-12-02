@@ -147,6 +147,8 @@ class Notifier:
         subscribers: set[str],
         message: str,
         at_all: bool = False,
+        max_retries: int = 3,
+        retry_delay: float = 2.0,
     ) -> None:
         """发送通知给所有订阅者
 
@@ -154,16 +156,32 @@ class Notifier:
             subscribers: 订阅者的 unified_msg_origin 集合
             message: 通知消息内容
             at_all: 是否 @全体成员
+            max_retries: 最大重试次数
+            retry_delay: 重试间隔（秒）
         """
+        import asyncio
+
         for umo in subscribers:
-            try:
-                result = MessageEventResult()
-                if at_all:
-                    result.chain.append(AtAll())
-                    result.chain.append(Plain("\n"))
-                result.chain.append(Plain(message))
-                await self.context.send_message(umo, result)
-                logger.info(f"已发送通知到: {umo}")
-            except Exception as e:
-                logger.error(f"发送通知失败 ({umo}): {e}")
+            for attempt in range(max_retries):
+                try:
+                    result = MessageEventResult()
+                    # 第一次尝试时使用 @全体，重试时不用（避免权限问题）
+                    if at_all and attempt == 0:
+                        result.chain.append(AtAll())
+                        result.chain.append(Plain("\n"))
+                    result.chain.append(Plain(message))
+                    await self.context.send_message(umo, result)
+                    logger.info(f"已发送通知到: {umo}")
+                    break  # 发送成功，跳出重试循环
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"发送通知失败 ({umo})，{retry_delay}秒后重试 "
+                            f"({attempt + 1}/{max_retries}): {e}"
+                        )
+                        await asyncio.sleep(retry_delay)
+                    else:
+                        logger.error(
+                            f"发送通知失败 ({umo})，已达最大重试次数: {e}"
+                        )
 
