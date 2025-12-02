@@ -3,7 +3,6 @@ import json
 import os
 import time
 from threading import Thread
-from typing import Dict, List, Set
 
 from astrbot.api import logger, star
 from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
@@ -106,11 +105,11 @@ class Main(star.Star):
         self.loop: asyncio.AbstractEventLoop = None
 
         # 数据结构
-        self.monitors: Dict[int, DouyuMonitor] = {}  # room_id -> DouyuMonitor
-        self.subscriptions: Dict[
-            int, Set[str]
+        self.monitors: dict[int, DouyuMonitor] = {}  # room_id -> DouyuMonitor
+        self.subscriptions: dict[
+            int, set[str]
         ] = {}  # room_id -> set of unified_msg_origin
-        self.room_info: Dict[int, dict] = {}  # room_id -> {name, added_by, added_time}
+        self.room_info: dict[int, dict] = {}  # room_id -> {name, added_by, added_time}
 
         # 加载配置
         self._load_data()
@@ -225,7 +224,7 @@ class Main(star.Star):
             logger.error("事件循环不可用，无法发送开播通知")
 
     async def _send_notifications(
-        self, subscribers: Set[str], message: str, at_all: bool = False
+        self, subscribers: set[str], message: str, at_all: bool = False
     ):
         """发送通知给所有订阅者"""
         for umo in subscribers:
