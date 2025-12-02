@@ -1,0 +1,45 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  ARCHIVE_PREFIX: astrbot_plugin_douyu_live
+
+jobs:
+  build-and-release:
+    name: Publish tagged release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare environment variables
+        id: prep
+        run: |
+          echo "TAG_NAME=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          echo "ARCHIVE_NAME=${ARCHIVE_PREFIX}-${GITHUB_REF_NAME}.zip" >> "$GITHUB_ENV"
+
+      - name: Build release archive
+        run: |
+          zip -r "$ARCHIVE_NAME" . \
+            -x ".git/*" \
+            -x ".github/workflows/*" \
+            -x ".venv/*" \
+            -x "__pycache__/*"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: astrbot_plugin_douyu_live ${{ env.TAG_NAME }}
+          files: ${{ env.ARCHIVE_NAME }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
