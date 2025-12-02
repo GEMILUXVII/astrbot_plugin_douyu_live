@@ -49,8 +49,9 @@ class DouyuMonitor:
         self.last_live_status: bool | None = None
         self._stop_flag = False  # 停止标志
         self.live_start_time: float | None = None  # 开播时间戳
-        self._connect_time: float | None = None  # 连接时间，用于启动稳定期
-        self._stable_delay = 10.0  # 启动后 10 秒内忽略状态变化
+        # 上次通知时间，防止短时间内重复通知
+        self._last_notify_time: float = 0.0
+        self._notify_cooldown = 30.0  # 通知冷却时间（秒）
 
     def _rss_handler(self, msg: dict) -> None:
         """处理直播状态变化
@@ -63,36 +64,38 @@ class DouyuMonitor:
             ivl = msg.get("ivl", "1")
             # ss='1' 表示正在直播, ivl='0' 表示不是回放
             is_live = ss == "1" and ivl == "0"
+            now = time.time()
 
-            # 检查是否在启动稳定期内
-            if self._connect_time is not None:
-                elapsed = time.time() - self._connect_time
-                if elapsed < self._stable_delay:
-                    # 在稳定期内，只更新状态，不触发通知
-                    if self.last_live_status is None:
-                        logger.info(
-                            f"斗鱼直播间 {self.room_id} 初始状态: "
-                            f"{'直播中' if is_live else '未开播'} (稳定期内)"
-                        )
-                    self.last_live_status = is_live
-                    if is_live and self.live_start_time is None:
-                        self.live_start_time = time.time()
-                    return
-
-            # 首次收到稳定期后的状态消息
+            # 首次收到状态消息，只记录不通知
             if self.last_live_status is None:
                 logger.info(
-                    f"斗鱼直播间 {self.room_id} 状态: {'直播中' if is_live else '未开播'}"
+                    f"斗鱼直播间 {self.room_id} 当前状态: "
+                    f"{'直播中' if is_live else '未开播'}"
                 )
                 self.last_live_status = is_live
                 if is_live:
-                    self.live_start_time = time.time()
+                    self.live_start_time = now
+                return
+
+            # 状态没有变化，忽略
+            if is_live == self.last_live_status:
+                return
+
+            # 检查通知冷却
+            time_since_notify = now - self._last_notify_time
+            if time_since_notify < self._notify_cooldown:
+                logger.debug(
+                    f"斗鱼直播间 {self.room_id} 状态变化但在冷却期内 "
+                    f"({time_since_notify:.1f}s < {self._notify_cooldown}s)，跳过通知"
+                )
+                self.last_live_status = is_live
                 return
 
             if is_live and not self.last_live_status:
                 # 从未开播变为开播，触发通知
                 logger.info(f"斗鱼直播间 {self.room_id} 开播了!")
-                self.live_start_time = time.time()  # 记录开播时间
+                self.live_start_time = now
+                self._last_notify_time = now
                 if self.live_callback:
                     self.live_callback(self.room_id, msg)
 
@@ -101,8 +104,9 @@ class DouyuMonitor:
                 logger.info(f"斗鱼直播间 {self.room_id} 下播了!")
                 duration = 0.0
                 if self.live_start_time:
-                    duration = time.time() - self.live_start_time
+                    duration = now - self.live_start_time
                     self.live_start_time = None
+                self._last_notify_time = now
                 if self.offline_callback:
                     self.offline_callback(self.room_id, duration)
 
@@ -139,17 +143,8 @@ class DouyuMonitor:
             # 注册礼物消息处理器
             self.client.add_handler("dgb", self._dgb_handler)
             self.running = True
-            # 记录连接时间，用于启动稳定期
-            self._connect_time = time.time()
-            logger.info(f"斗鱼监控器 {self.room_id} 连接中...")
-
-            # client.start() 会启动内部线程，立即返回
-            # 内部线程 (message_worker, heartbeat_worker) 会处理重连
             self.client.start()
-            logger.info(
-                f"斗鱼监控器 {self.room_id} 已启动 "
-                f"(启动稳定期 {self._stable_delay:.0f} 秒)"
-            )
+            logger.info(f"斗鱼监控器 {self.room_id} 已启动")
 
             # 等待内部线程结束或收到停止信号
             # message_worker 是一个 Thread，我们等待它
