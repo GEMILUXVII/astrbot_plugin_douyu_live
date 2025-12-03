@@ -76,6 +76,31 @@ HIGH_VALUE_GIFT_IDS: set[str] = {
     "123",  # 佛跳墙
 }
 
+# 礼物价值映射（元）
+# 来源：斗鱼官方礼物价格
+GIFT_VALUES: dict[str, float] = {
+    "824": 0.1,     # 粉丝荧光棒
+    "193": 0.1,     # 小星星
+    "192": 0.1,     # 赞
+    "712": 0.1,     # 棒棒哒
+    "713": 1.0,     # 怦然心动
+    "714": 1.0,     # 告白
+    "380": 1.0,     # 好人卡
+    "519": 1.0,     # 呵呵
+    "520": 1.0,     # 稳
+    "750": 6.0,     # 办卡
+    "186": 6.0,     # 办卡
+    "195": 100.0,   # 飞机
+    "196": 500.0,   # 火箭
+    "268": 1000.0,  # 超级火箭
+    "64": 1000.0,   # 跑车
+    "63": 10.0,     # 任性一下
+    "123": 200.0,   # 佛跳墙
+    "194": 10.0,    # 帐篷
+    "717": 1.0,     # 氧气女孩
+    "825": 1.0,     # 超级粉丝荧光棒
+}
+
 
 def is_high_value_gift(gift_id: str | int) -> bool:
     """判断是否为高价值礼物（飞机及以上）
@@ -99,4 +124,16 @@ def get_gift_name(gift_id: str | int) -> str:
         礼物名称
     """
     return GIFT_NAMES.get(str(gift_id), f"{DEFAULT_GIFT_NAME}({gift_id})")
+
+
+def get_gift_value(gift_id: str | int) -> float:
+    """获取礼物价值（单位：元）
+
+    Args:
+        gift_id: 礼物 ID
+
+    Returns:
+        礼物价值，未知礼物返回 0.0
+    """
+    return GIFT_VALUES.get(str(gift_id), 0.0)
 
