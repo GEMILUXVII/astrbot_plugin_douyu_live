@@ -2,6 +2,28 @@
 
 本文件记录 `astrbot_plugin_douyu_live` 插件的版本更新历史。
 
+## [1.4.0] - 2025-12-02
+
+### 新增
+
+- **直播总结功能**：下播时自动生成并推送礼物统计总结
+  - 显示直播时长、收礼次数、礼物总价值、送礼人数
+  - 显示榜一大哥（贡献最高的用户）及其贡献金额
+  - 新增 `/douyu summary <房间号> [on/off]` 命令，管理员可开启/关闭直播总结
+- **SQLite 持久化存储**：新增 `storage/session_store.py` 模块
+  - 使用 SQLite 存储每场直播的会话数据和礼物记录
+  - 支持历史数据查询
+  - 线程安全设计
+
+### 变更
+
+- `RoomInfo` 数据模型新增 `summary_notify` 字段（默认开启）
+- `Notifier` 新增 `build_summary_notification()` 方法
+- `/douyu ls` 命令现显示直播总结状态
+- `utils/constants.py` 新增礼物价值映射 `GIFT_VALUES` 和 `get_gift_value()` 函数
+
+---
+
 ## [1.3.0] - 2025-12-02
 
 ### 新增

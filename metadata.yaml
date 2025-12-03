@@ -1,5 +1,5 @@
 name: astrbot_plugin_douyu_live
-desc: 全自动监控多房间开播、推送通知与礼物播报
+desc: 全自动监控多房间开播、推送通知、礼物播报与直播总结
 author: GEMILUXVII
-version: 1.3.0
+version: 1.4.0
 repo: "https://github.com/GEMILUXVII/astrbot_plugin_douyu_live"

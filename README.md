@@ -12,7 +12,7 @@
 </div>
 
 <div align="center">
-  <a href="#更新日志"><img src="https://img.shields.io/badge/version-v1.3.0-9644F4?style=for-the-badge" alt="Version"></a>
+  <a href="#更新日志"><img src="https://img.shields.io/badge/version-v1.4.0-9644F4?style=for-the-badge" alt="Version"></a>
   <a href="https://github.com/GEMILUXVII/astrbot_plugin_douyu_live/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-E53935?style=for-the-badge" alt="License"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"></a>
   <a href="https://github.com/AstrBotDevs/AstrBot"><img src="https://img.shields.io/badge/AstrBot-Compatible-00BFA5?style=for-the-badge&logo=robot&logoColor=white" alt="AstrBot Compatible"></a>
@@ -37,9 +37,10 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 - **@全体成员**：支持开播时自动 @全体成员（可选）
 - **礼物播报**：支持直播间礼物实时播报，可过滤低价值礼物
 - **下播通知**：自动推送下播提醒并附带当次直播时长
+- **直播总结**：下播时自动生成礼物统计总结（收礼数量、金额、榜一大哥等）
 - **抗抖动机制**：内置状态冷却、重试与自动恢复，避免重复或漏报
 - **自动获取主播名**：添加房间时自动从斗鱼获取主播名称
-- **数据持久化**：监控与订阅数据自动保存，重启不丢失
+- **数据持久化**：监控与订阅数据自动保存，重启不丢失（SQLite）
 - **权限控制**：添加/删除直播间需管理员权限
 - **状态查询**：随时查看监控与订阅状态
 
@@ -81,6 +82,7 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 | `/douyu atall <房间号> [on/off]`      | 设置 @全体成员      | `/douyu atall 12725169 on`       |
 | `/douyu gift <房间号> [on/off]`       | 开启/关闭礼物播报   | `/douyu gift 12725169 on`        |
 | `/douyu giftfilter <房间号> [on/off]` | 开启/关闭高价值过滤 | `/douyu giftfilter 12725169 off` |
+| `/douyu summary <房间号> [on/off]`    | 开启/关闭直播总结   | `/douyu summary 12725169 on`     |
 | `/douyu restart [房间号]`             | 重启监控            | `/douyu restart`                 |
 
 ### 普通用户命令
@@ -126,6 +128,14 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 ```
 /douyu atall 12725169 on
 ```
+
+### 开启直播总结
+
+```
+/douyu summary 12725169 on
+```
+
+下播时会自动发送礼物统计总结。
 
 ### 查看监控状态
 
@@ -173,15 +183,34 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 感谢观看，下次再见！
 ```
 
+### 直播总结
+
+```
+📊 直播总结
+━━━━━━━━━━━━━━
+直播间: 某主播
+房间号: 12725169
+直播时长: 2小时30分
+━━━━━━━━━━━━━━
+🎁 礼物统计
+收礼次数: 156
+礼物总价值: ¥1,234.50
+送礼人数: 42
+━━━━━━━━━━━━━━
+🏆 榜一大哥: 土豪用户
+贡献: ¥500.00
+━━━━━━━━━━━━━━
+感谢大家的支持！
+```
+
 ## 数据存储
 
-插件数据默认存储于：
+插件数据存储于：
 
-```
-data/plugin_data/astrbot_plugin_douyu_live/douyu_live_data.json
-```
+- **订阅配置**: `data/plugin_data/astrbot_plugin_douyu_live/douyu_live_data.json`
+- **直播会话**: `data/plugin_data/astrbot_plugin_douyu_live/sessions.db`（SQLite）
 
-数据结构示例：
+JSON 数据结构示例：
 
 ```json
 {
@@ -195,11 +224,17 @@ data/plugin_data/astrbot_plugin_douyu_live/douyu_live_data.json
       "added_time": "2024-01-01 12:00:00",
       "at_all": true,
       "gift_notify": true,
-      "high_value_only": true
+      "high_value_only": true,
+      "summary_notify": true
     }
   }
 }
 ```
+
+SQLite 数据库包含以下表：
+
+- **sessions**: 存储每场直播的基本信息（开始/结束时间、礼物统计等）
+- **gifts**: 存储每场直播的详细礼物记录
 
 ## 常见问题
 
