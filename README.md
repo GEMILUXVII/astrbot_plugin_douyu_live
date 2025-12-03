@@ -2,17 +2,16 @@
   <img src="LOGO.png" alt="AstrBot Douyu Plugin Logo" width="160" />
 </div>
 
-# <div align="center">AstrBot 斗鱼直播通知插件</div>
+# <div align="center">Douyu Live</div>
 
 <div align="center">
-  <a href="#插件简介">插件简介</a> •
-  <a href="#功能特性">功能特性</a> •
-  <a href="#命令列表">命令列表</a> •
-  <a href="CHANGELOG.md">更新日志</a>
+  <strong>AstrBot 斗鱼直播间监控与通知插件</strong>
 </div>
 
+<br>
+
 <div align="center">
-  <a href="#更新日志"><img src="https://img.shields.io/badge/version-v1.3.0-9644F4?style=for-the-badge" alt="Version"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-v1.3.0-9644F4?style=for-the-badge" alt="Version"></a>
   <a href="https://github.com/GEMILUXVII/astrbot_plugin_douyu_live/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-E53935?style=for-the-badge" alt="License"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"></a>
   <a href="https://github.com/AstrBotDevs/AstrBot"><img src="https://img.shields.io/badge/AstrBot-Compatible-00BFA5?style=for-the-badge&logo=robot&logoColor=white" alt="AstrBot Compatible"></a>
@@ -24,7 +23,14 @@
   <a href="https://github.com/GEMILUXVII/astrbot_plugin_douyu_live/commits/master"><img src="https://img.shields.io/badge/updated-2025--12--02-0097A7?style=for-the-badge&logo=calendar&logoColor=white" alt="Last Updated"></a>
 </div>
 
-<div align="center"><em>多房间监控，智能推送，斗鱼开播通知全自动！</em></div>
+<br>
+
+<div align="center">
+  <a href="#插件简介">插件简介</a> •
+  <a href="#功能特性">功能特性</a> •
+  <a href="#命令列表">命令列表</a> •
+  <a href="CHANGELOG.md">更新日志</a>
+</div>
 
 ## 插件简介
 
@@ -230,8 +236,9 @@ A: 可能因主播频繁开关播或插件重启导致，属正常偶发现象�
 ## 相关链接
 
 - [AstrBot 官方文档](https://astrbot.app/)
-- [AstrBot 插件开发指南](https://astrbot.app/dev/plugin.html)
+- [AstrBot 插件开发指南](https://docs.astrbot.app/dev/star/plugin-new.html)
 - [斗鱼直播](https://www.douyu.com/)
+- [pydouyu](https://github.com/Kexiii/pydouyu)
 
 ## 许可证
 
