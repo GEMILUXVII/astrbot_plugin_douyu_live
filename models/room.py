@@ -15,6 +15,7 @@ class RoomInfo:
         at_all: 是否开启 @全体成员（开播通知）
         gift_notify: 是否开启礼物播报
         high_value_only: 是否只播报高价值礼物（飞机及以上）
+        summary_notify: 是否开启直播总结（下播时推送本场统计）
     """
     name: str
     added_by: str = ""
@@ -22,6 +23,7 @@ class RoomInfo:
     at_all: bool = False
     gift_notify: bool = False
     high_value_only: bool = True  # 默认只播报高价值礼物
+    summary_notify: bool = True  # 默认开启直播总结
 
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
@@ -37,5 +39,6 @@ class RoomInfo:
             at_all=data.get("at_all", False),
             gift_notify=data.get("gift_notify", False),
             high_value_only=data.get("high_value_only", True),
+            summary_notify=data.get("summary_notify", True),
         )
 
