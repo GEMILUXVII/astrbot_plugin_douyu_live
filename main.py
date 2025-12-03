@@ -11,8 +11,8 @@ from astrbot.api.event import AstrMessageEvent, filter
 
 from .core import PYDOUYU_AVAILABLE, DouyuAPI, DouyuMonitor, Notifier
 from .models import RoomInfo
-from .storage import DataManager
-from .utils.constants import is_high_value_gift
+from .storage import DataManager, SessionStore
+from .utils.constants import get_gift_name, get_gift_value, is_high_value_gift
 
 
 class Main(star.Star):
@@ -30,6 +30,7 @@ class Main(star.Star):
     - /douyu atall <房间号> [on/off] - 设置@全体（管理员）
     - /douyu gift <房间号> [on/off] - 开启/关闭礼物播报（管理员）
     - /douyu giftfilter <房间号> [on/off] - 开启/关闭高价值礼物过滤（管理员）
+    - /douyu summary <房间号> [on/off] - 开启/关闭直播总结（管理员）
     """
 
     def __init__(self, context: star.Context) -> None:
@@ -41,6 +42,7 @@ class Main(star.Star):
 
         # 初始化模块
         self.data = DataManager()
+        self.session_store = SessionStore()
         self.notifier = Notifier(context)
         self.monitors: dict[int, DouyuMonitor] = {}
 
@@ -96,6 +98,9 @@ class Main(star.Star):
 
     def _on_live_start(self, room_id: int, msg: dict) -> None:
         """开播回调 - 发送通知给所有订阅者"""
+        # 开始记录本场直播 session
+        self.session_store.start_session(room_id)
+
         subscribers = self.data.get_subscribers(room_id)
         if not subscribers:
             return
@@ -128,12 +133,29 @@ class Main(star.Star):
         """
         room_info = self.data.get_room(room_id)
 
+        # 解析礼物 ID 和信息
+        gift_id = msg.get("gfid", "0")
+        user_name = msg.get("nn", "未知用户")
+        user_id = msg.get("uid", "0")
+        # 礼物数量可能在 gfcnt 或 hits 字段
+        gift_count = int(msg.get("gfcnt", msg.get("hits", "1")))
+        gift_name = get_gift_name(gift_id)
+        gift_value = get_gift_value(gift_id) * gift_count
+
+        # 记录礼物到 session（无论是否播报都记录）
+        self.session_store.add_gift(
+            room_id=room_id,
+            user_name=user_name,
+            user_id=user_id,
+            gift_id=gift_id,
+            gift_name=gift_name,
+            gift_count=gift_count,
+            gift_value=gift_value,
+        )
+
         # 检查是否开启了礼物播报
         if not room_info or not room_info.gift_notify:
             return
-
-        # 解析礼物 ID
-        gift_id = msg.get("gfid", "0")
 
         # 如果开启了高价值过滤，只播报飞机及以上的礼物
         if room_info.high_value_only and not is_high_value_gift(gift_id):
@@ -142,11 +164,6 @@ class Main(star.Star):
         subscribers = self.data.get_subscribers(room_id)
         if not subscribers:
             return
-
-        # 解析礼物信息
-        user_name = msg.get("nn", "未知用户")
-        # 礼物数量可能在 gfcnt 或 hits 字段
-        gift_count = int(msg.get("gfcnt", msg.get("hits", "1")))
 
         room_name = room_info.name
 
@@ -169,12 +186,15 @@ class Main(star.Star):
             logger.error("事件循环不可用，无法发送礼物通知")
 
     def _on_live_end(self, room_id: int, duration_seconds: float) -> None:
-        """下播回调 - 发送下播通知给所有订阅者
+        """下播回调 - 发送下播通知和直播总结给所有订阅者
 
         Args:
             room_id: 房间号
             duration_seconds: 直播时长（秒）
         """
+        # 结束 session 并获取统计数据
+        session_stats = self.session_store.end_session(room_id, duration_seconds)
+
         subscribers = self.data.get_subscribers(room_id)
         if not subscribers:
             return
@@ -182,16 +202,26 @@ class Main(star.Star):
         room_info = self.data.get_room(room_id)
         room_name = room_info.name if room_info else f"房间{room_id}"
 
+        # 发送下播通知
         notification = self.notifier.build_offline_notification(
             room_id, room_name, duration_seconds
         )
 
-        # 异步发送通知（从子线程调度到主事件循环）
         if self.loop and self.loop.is_running():
             asyncio.run_coroutine_threadsafe(
                 self.notifier.send_to_subscribers(subscribers, notification, at_all=False),
                 self.loop,
             )
+
+            # 如果开启了直播总结且有统计数据，发送总结
+            if room_info and room_info.summary_notify and session_stats:
+                summary = self.notifier.build_summary_notification(
+                    room_id, room_name, session_stats
+                )
+                asyncio.run_coroutine_threadsafe(
+                    self.notifier.send_to_subscribers(subscribers, summary, at_all=False),
+                    self.loop,
+                )
         else:
             logger.error("事件循环不可用，无法发送下播通知")
 
@@ -279,11 +309,13 @@ class Main(star.Star):
             at_all_status = "✅" if info.at_all else "❌"
             gift_status = "✅" if info.gift_notify else "❌"
             gift_filter = "仅高价值" if info.high_value_only else "全部"
+            summary_status = "✅" if info.summary_notify else "❌"
             lines.append(
                 f"{idx}. {info.name}\n"
                 f"   房间号: {room_id}\n"
                 f"   订阅数: {sub_count}\n"
                 f"   @全体: {at_all_status} | 礼物: {gift_status}({gift_filter})\n"
+                f"   直播总结: {summary_status}\n"
                 f"   状态: {status}"
             )
 
@@ -495,4 +527,37 @@ class Main(star.Star):
                 f"✅ 直播间 {room_info.name}({room_id})\n"
                 f"🎁 礼物过滤: 播报所有礼物"
             )
+
+    @douyu.command("summary")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def douyu_summary(self, event: AstrMessageEvent, room_id: int, enable: str = ""):
+        """开启/关闭直播总结（管理员）
+
+        开启后下播时会发送本场直播的礼物统计总结。
+
+        Args:
+            room_id: 斗鱼直播间房间号
+            enable: on/off 或留空切换状态
+        """
+        room_info = self.data.get_room(room_id)
+        if not room_info:
+            yield event.plain_result(f"⚠️ 直播间 {room_id} 不在监控列表中")
+            return
+
+        current = room_info.summary_notify
+
+        if enable.lower() == "on":
+            new_status = True
+        elif enable.lower() == "off":
+            new_status = False
+        else:
+            new_status = not current
+
+        self.data.update_room(room_id, summary_notify=new_status)
+
+        status_text = "开启" if new_status else "关闭"
+        yield event.plain_result(
+            f"✅ 直播间 {room_info.name}({room_id})\n"
+            f"📊 直播总结 已{status_text}"
+        )
 
