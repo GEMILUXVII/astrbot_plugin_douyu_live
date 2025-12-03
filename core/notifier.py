@@ -12,6 +12,8 @@ from ..utils.constants import get_gift_name
 if TYPE_CHECKING:
     from astrbot.api import star
 
+    from ..storage.session_store import SessionStats
+
 
 class Notifier:
     """通知发送器
@@ -141,6 +143,69 @@ class Notifier:
             f"━━━━━━━━━━━━━━\n"
             f"感谢观看，下次再见！"
         )
+
+    def build_summary_notification(
+        self,
+        room_id: int,
+        room_name: str,
+        stats: "SessionStats",
+        timestamp: float | None = None,
+    ) -> str:
+        """构建直播总结通知消息文本
+
+        Args:
+            room_id: 房间号
+            room_name: 房间/主播名称
+            stats: 会话统计对象
+            timestamp: 时间戳，默认当前时间
+
+        Returns:
+            格式化的直播总结消息
+        """
+        if timestamp is None:
+            timestamp = time.time()
+
+        # 计算时长
+        duration_seconds = timestamp - stats.start_time
+        if duration_seconds > 0:
+            hours = int(duration_seconds // 3600)
+            minutes = int((duration_seconds % 3600) // 60)
+            if hours > 0:
+                duration_str = f"{hours}小时{minutes}分钟"
+            else:
+                duration_str = f"{minutes}分钟"
+        else:
+            duration_str = "未知"
+
+        # 基本信息
+        lines = [
+            "📊 斗鱼直播总结",
+            "━━━━━━━━━━━━━━",
+            f"👤 主播: {room_name}",
+            f"⏱️ 本场时长: {duration_str}",
+        ]
+
+        # 礼物统计
+        if stats.total_gift_count > 0:
+            lines.append(f"🎁 礼物总数: {stats.total_gift_count}")
+            if stats.total_gift_value > 0:
+                lines.append(f"💰 礼物价值: ≈{stats.total_gift_value:.0f}元")
+            lines.append(f"👥 送礼用户: {len(stats.get_unique_users())}人")
+
+            # 高光礼物（前5）
+            top_gifts = stats.get_top_gifts(5)
+            if top_gifts:
+                lines.append("━━━━━━━━━━━━━━")
+                lines.append("🏆 高光礼物:")
+                for user, gift, count in top_gifts:
+                    lines.append(f"  • {user} → {gift} x{count}")
+        else:
+            lines.append("🎁 本场无礼物记录")
+
+        lines.append("━━━━━━━━━━━━━━")
+        lines.append("感谢所有支持！")
+
+        return "\n".join(lines)
 
     async def send_to_subscribers(
         self,
