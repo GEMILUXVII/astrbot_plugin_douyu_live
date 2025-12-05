@@ -1,10 +1,12 @@
-"""AstrBot 斗鱼直播通知插件
+"""斗鱼直播通知插件
 
 支持多房间监控、订阅推送、@全体成员、礼物播报等功能。
 """
 
 import asyncio
 import time
+from dataclasses import dataclass
+from queue import Empty, Queue
 
 from astrbot.api import logger, star
 from astrbot.api.event import AstrMessageEvent, filter
