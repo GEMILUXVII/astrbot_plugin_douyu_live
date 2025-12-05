@@ -2,7 +2,7 @@
 
 import time
 from collections.abc import Callable
-from threading import Thread
+from threading import Lock, Thread
 
 from astrbot.api import logger
 
@@ -53,6 +53,8 @@ class DouyuMonitor:
         # 上次通知时间，防止短时间内重复通知
         self._last_notify_time: float = 0.0
         self._notify_cooldown = 30.0  # 通知冷却时间（秒）
+        # 线程锁，保护 client 和状态变量
+        self._lock = Lock()
 
     def _rss_handler(self, msg: dict) -> None:
         """处理直播状态变化
@@ -148,14 +150,20 @@ class DouyuMonitor:
 
     def _run_client(self) -> None:
         """在线程中运行客户端"""
+        client_to_cleanup = None
         try:
-            # 创建 Client 实例
-            self.client = Client(room_id=self.room_id)
-            # 注册直播状态处理器
-            self.client.add_handler("rss", self._rss_handler)
-            # 注册礼物消息处理器
-            self.client.add_handler("dgb", self._dgb_handler)
-            self.running = True
+            with self._lock:
+                if self._stop_flag:
+                    return
+                # 创建 Client 实例
+                self.client = Client(room_id=self.room_id)
+                client_to_cleanup = self.client
+                # 注册直播状态处理器
+                self.client.add_handler("rss", self._rss_handler)
+                # 注册礼物消息处理器
+                self.client.add_handler("dgb", self._dgb_handler)
+                self.running = True
+
             self.client.start()
             logger.info(f"斗鱼监控器 {self.room_id} 已启动")
 
@@ -168,17 +176,25 @@ class DouyuMonitor:
         except Exception as e:
             logger.error(f"斗鱼监控器 {self.room_id} 运行出错: {e}")
         finally:
-            self.running = False
-            self._cleanup_client()
+            with self._lock:
+                self.running = False
+                # 只有当 client 没有被 stop() 清理时才在这里清理
+                if self.client is client_to_cleanup and self.client is not None:
+                    self._cleanup_client_internal()
 
-    def _cleanup_client(self) -> None:
-        """清理客户端资源"""
+    def _cleanup_client_internal(self) -> None:
+        """内部清理客户端资源（调用者需持有锁）"""
         if self.client:
             try:
                 self.client.stop()
             except Exception:
                 pass
             self.client = None
+
+    def _cleanup_client(self) -> None:
+        """清理客户端资源（线程安全）"""
+        with self._lock:
+            self._cleanup_client_internal()
 
     def start(self) -> bool:
         """启动监控
@@ -201,7 +217,11 @@ class DouyuMonitor:
     def stop(self) -> None:
         """停止监控"""
         self._stop_flag = True
-        self.running = False
-        self._cleanup_client()
+        with self._lock:
+            self.running = False
+            self._cleanup_client_internal()
+        # 等待线程结束
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=5.0)
         logger.info(f"斗鱼直播间 {self.room_id} 监控已停止")
 
