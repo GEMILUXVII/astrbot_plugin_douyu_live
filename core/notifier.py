@@ -144,24 +144,22 @@ class Notifier:
 
     async def send_to_subscribers(
         self,
-        subscribers: set[str],
+        subscriber_settings: dict[str, bool],
         message: str,
-        at_all: bool = False,
         max_retries: int = 3,
         retry_delay: float = 2.0,
     ) -> None:
         """发送通知给所有订阅者
 
         Args:
-            subscribers: 订阅者的 unified_msg_origin 集合
+            subscriber_settings: {umo -> at_all} 每个订阅者的 @全体设置
             message: 通知消息内容
-            at_all: 是否 @全体成员
             max_retries: 最大重试次数
             retry_delay: 重试间隔（秒）
         """
         import asyncio
 
-        for umo in subscribers:
+        for umo, at_all in subscriber_settings.items():
             for attempt in range(max_retries):
                 try:
                     result = MessageEventResult()
@@ -171,7 +169,7 @@ class Notifier:
                         result.chain.append(Plain("\n"))
                     result.chain.append(Plain(message))
                     await self.context.send_message(umo, result)
-                    logger.info(f"已发送通知到: {umo}")
+                    logger.info(f"已发送通知到: {umo} (at_all={at_all})")
                     break  # 发送成功，跳出重试循环
                 except Exception as e:
                     if attempt < max_retries - 1:
