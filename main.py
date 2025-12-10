@@ -20,9 +20,8 @@ from .utils.constants import is_high_value_gift
 @dataclass
 class PendingNotification:
     """待发送的通知"""
-    subscribers: set[str]
+    subscriber_settings: dict[str, bool]  # {umo -> at_all}
     message: str
-    at_all: bool = False
     retry_count: int = 0
 
 
@@ -140,7 +139,7 @@ class Main(star.Star):
                 for item in pending_items:
                     try:
                         await self.notifier.send_to_subscribers(
-                            item.subscribers, item.message, item.at_all
+                            item.subscriber_settings, item.message
                         )
                     except Exception as e:
                         item.retry_count += 1
@@ -159,41 +158,51 @@ class Main(star.Star):
                 logger.error(f"通知队列处理器出错: {e}")
 
     def _schedule_notification(
-        self, subscribers: set[str], message: str, at_all: bool = False
+        self, subscriber_settings: dict[str, bool], message: str
     ) -> None:
         """安全地调度通知发送
 
-        如果事件循环可用，直接调度；否则放入队列稍后处理。
+        Args:
+            subscriber_settings: {umo -> at_all} 每个订阅者的 @全体设置
+            message: 通知消息内容
         """
+        if not subscriber_settings:
+            return
+
         if self.loop and self.loop.is_running():
             asyncio.run_coroutine_threadsafe(
-                self.notifier.send_to_subscribers(subscribers, message, at_all),
+                self.notifier.send_to_subscribers(subscriber_settings, message),
                 self.loop,
             )
         else:
             # 事件循环不可用，放入队列稍后处理
             logger.warning("事件循环暂时不可用，通知已加入队列")
             self._notification_queue.put(
-                PendingNotification(subscribers=subscribers, message=message, at_all=at_all)
+                PendingNotification(subscriber_settings=subscriber_settings, message=message)
             )
 
     def _on_live_start(self, room_id: int, msg: dict) -> None:
         """开播回调 - 发送通知给所有订阅者"""
-        subscribers = self.data.get_subscribers(room_id)
-        if not subscribers:
+        # 获取所有订阅者的配置
+        sub_configs = self.data.get_all_subscription_configs(room_id)
+        if not sub_configs:
             return
 
         room_info = self.data.get_room(room_id)
         room_name = room_info.name if room_info else f"房间{room_id}"
-        at_all_enabled = room_info.at_all if room_info else False
 
         notification = self.notifier.build_notification(room_id, room_name)
 
+        # 构建每个订阅者的 at_all 设置
+        subscriber_settings = {
+            umo: config.at_all for umo, config in sub_configs.items()
+        }
+
         # 安全地调度通知发送
-        self._schedule_notification(subscribers, notification, at_all_enabled)
+        self._schedule_notification(subscriber_settings, notification)
 
     def _on_gift(self, room_id: int, msg: dict) -> None:
-        """礼物回调 - 发送礼物播报给所有订阅者
+        """礼物回调 - 发送礼物播报给开启礼物播报的订阅者
 
         Args:
             room_id: 房间号
@@ -204,20 +213,24 @@ class Main(star.Star):
                 - gfcnt / hits: 礼物数量
         """
         room_info = self.data.get_room(room_id)
-
-        # 检查是否开启了礼物播报
-        if not room_info or not room_info.gift_notify:
+        if not room_info:
             return
 
         # 解析礼物 ID
         gift_id = msg.get("gfid", "0")
 
-        # 如果开启了高价值过滤，只播报飞机及以上的礼物
-        if room_info.high_value_only and not is_high_value_gift(gift_id):
-            return
+        # 获取所有订阅者的配置，筛选开启礼物播报的订阅者
+        sub_configs = self.data.get_all_subscription_configs(room_id)
+        gift_subscribers = {}
+        for umo, config in sub_configs.items():
+            if not config.gift_notify:
+                continue
+            # 如果开启了高价值过滤，只播报飞机及以上的礼物
+            if config.high_value_only and not is_high_value_gift(gift_id):
+                continue
+            gift_subscribers[umo] = False  # 礼物通知不 @全体
 
-        subscribers = self.data.get_subscribers(room_id)
-        if not subscribers:
+        if not gift_subscribers:
             return
 
         # 解析礼物信息
@@ -242,7 +255,7 @@ class Main(star.Star):
         )
 
         # 安全地调度通知发送
-        self._schedule_notification(subscribers, notification, at_all=False)
+        self._schedule_notification(gift_subscribers, notification)
 
     def _on_live_end(self, room_id: int, duration_seconds: float) -> None:
         """下播回调 - 发送下播通知给所有订阅者
@@ -251,8 +264,8 @@ class Main(star.Star):
             room_id: 房间号
             duration_seconds: 直播时长（秒）
         """
-        subscribers = self.data.get_subscribers(room_id)
-        if not subscribers:
+        sub_configs = self.data.get_all_subscription_configs(room_id)
+        if not sub_configs:
             return
 
         room_info = self.data.get_room(room_id)
@@ -262,8 +275,11 @@ class Main(star.Star):
             room_id, room_name, duration_seconds
         )
 
+        # 下播通知不 @全体
+        subscriber_settings = dict.fromkeys(sub_configs.keys(), False)
+
         # 安全地调度通知发送
-        self._schedule_notification(subscribers, notification, at_all=False)
+        self._schedule_notification(subscriber_settings, notification)
 
     # ==================== 命令组 ====================
 
