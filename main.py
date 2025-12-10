@@ -369,14 +369,10 @@ class Main(star.Star):
         for idx, (room_id, info) in enumerate(rooms.items(), 1):
             sub_count = len(self.data.get_subscribers(room_id))
             status = "🟢 运行中" if room_id in self.monitors else "🔴 已停止"
-            at_all_status = "✅" if info.at_all else "❌"
-            gift_status = "✅" if info.gift_notify else "❌"
-            gift_filter = "仅高价值" if info.high_value_only else "全部"
             lines.append(
                 f"{idx}. {info.name}\n"
                 f"   房间号: {room_id}\n"
                 f"   订阅数: {sub_count}\n"
-                f"   @全体: {at_all_status} | 礼物: {gift_status}({gift_filter})\n"
                 f"   状态: {status}"
             )
 
@@ -423,13 +419,13 @@ class Main(star.Star):
 
     @douyu.command("mysub")
     async def douyu_mysub(self, event: AstrMessageEvent):
-        """查看我的订阅"""
+        """查看当前群的订阅"""
         umo = event.unified_msg_origin
         room_ids = self.data.get_user_subscriptions(umo)
 
         if not room_ids:
             yield event.plain_result(
-                "📋 你还没有订阅任何直播间\n"
+                "📋 当前群还没有订阅任何直播间\n"
                 "使用 /douyu ls 查看可订阅的直播间\n"
                 "使用 /douyu sub <房间号> 订阅"
             )
@@ -439,9 +435,20 @@ class Main(star.Star):
         for room_id in room_ids:
             room_info = self.data.get_room(room_id)
             room_name = room_info.name if room_info else str(room_id)
-            my_subs.append(f"• {room_name} ({room_id})")
+            # 获取当前群的订阅配置
+            sub_config = self.data.get_subscription_config(room_id, umo)
+            if sub_config:
+                at_all_icon = "✅" if sub_config.at_all else "❌"
+                gift_icon = "✅" if sub_config.gift_notify else "❌"
+                filter_text = "仅高价值" if sub_config.high_value_only else "全部"
+                my_subs.append(
+                    f"• {room_name} ({room_id})\n"
+                    f"  @全体:{at_all_icon} | 礼物:{gift_icon}({filter_text})"
+                )
+            else:
+                my_subs.append(f"• {room_name} ({room_id})")
 
-        yield event.plain_result("📋 你的订阅列表\n━━━━━━━━━━━━━━\n" + "\n".join(my_subs))
+        yield event.plain_result("📋 当前群的订阅列表\n━━━━━━━━━━━━━━\n" + "\n".join(my_subs))
 
     @douyu.command("status")
     async def douyu_status(self, event: AstrMessageEvent):
@@ -519,7 +526,9 @@ class Main(star.Star):
     @douyu.command("atall")
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def douyu_atall(self, event: AstrMessageEvent, room_id: int, enable: str = ""):
-        """开启/关闭 @全体成员（管理员）
+        """开启/关闭当前群的 @全体成员（管理员）
+
+        此设置只对当前群生效，不影响其他订阅了同一直播间的群。
 
         Args:
             room_id: 斗鱼直播间房间号
@@ -530,7 +539,16 @@ class Main(star.Star):
             yield event.plain_result(f"⚠️ 直播间 {room_id} 不在监控列表中")
             return
 
-        current = room_info.at_all
+        umo = event.unified_msg_origin
+        sub_config = self.data.get_subscription_config(room_id, umo)
+        if not sub_config:
+            yield event.plain_result(
+                f"⚠️ 当前群还没有订阅直播间 {room_id}\n"
+                f"请先使用 /douyu sub {room_id} 订阅"
+            )
+            return
+
+        current = sub_config.at_all
 
         if enable.lower() == "on":
             new_status = True
@@ -539,15 +557,20 @@ class Main(star.Star):
         else:
             new_status = not current
 
-        self.data.update_room(room_id, at_all=new_status)
+        self.data.update_subscription_config(room_id, umo, at_all=new_status)
 
         status_text = "开启" if new_status else "关闭"
-        yield event.plain_result(f"✅ 直播间 {room_info.name}({room_id})\n@全体成员 已{status_text}")
+        yield event.plain_result(
+            f"✅ 直播间 {room_info.name}({room_id})\n"
+            f"当前群的 @全体成员 已{status_text}"
+        )
 
     @douyu.command("gift")
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def douyu_gift(self, event: AstrMessageEvent, room_id: int, enable: str = ""):
-        """开启/关闭礼物播报（管理员）
+        """开启/关闭当前群的礼物播报（管理员）
+
+        此设置只对当前群生效，不影响其他订阅了同一直播间的群。
 
         Args:
             room_id: 斗鱼直播间房间号
@@ -558,7 +581,16 @@ class Main(star.Star):
             yield event.plain_result(f"⚠️ 直播间 {room_id} 不在监控列表中")
             return
 
-        current = room_info.gift_notify
+        umo = event.unified_msg_origin
+        sub_config = self.data.get_subscription_config(room_id, umo)
+        if not sub_config:
+            yield event.plain_result(
+                f"⚠️ 当前群还没有订阅直播间 {room_id}\n"
+                f"请先使用 /douyu sub {room_id} 订阅"
+            )
+            return
+
+        current = sub_config.gift_notify
 
         if enable.lower() == "on":
             new_status = True
@@ -567,22 +599,23 @@ class Main(star.Star):
         else:
             new_status = not current
 
-        self.data.update_room(room_id, gift_notify=new_status)
+        self.data.update_subscription_config(room_id, umo, gift_notify=new_status)
 
         status_text = "开启" if new_status else "关闭"
-        filter_status = "仅高价值" if room_info.high_value_only else "全部"
+        filter_status = "仅高价值" if sub_config.high_value_only else "全部"
         yield event.plain_result(
             f"✅ 直播间 {room_info.name}({room_id})\n"
-            f"🎁 礼物播报 已{status_text}\n"
+            f"当前群的 🎁 礼物播报 已{status_text}\n"
             f"📊 过滤模式: {filter_status}"
         )
 
     @douyu.command("giftfilter")
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def douyu_giftfilter(self, event: AstrMessageEvent, room_id: int, enable: str = ""):
-        """开启/关闭高价值礼物过滤（管理员）
+        """开启/关闭当前群的高价值礼物过滤（管理员）
 
         开启后只播报飞机及以上的礼物，关闭后播报所有礼物。
+        此设置只对当前群生效，不影响其他订阅了同一直播间的群。
 
         Args:
             room_id: 斗鱼直播间房间号
@@ -593,7 +626,16 @@ class Main(star.Star):
             yield event.plain_result(f"⚠️ 直播间 {room_id} 不在监控列表中")
             return
 
-        current = room_info.high_value_only
+        umo = event.unified_msg_origin
+        sub_config = self.data.get_subscription_config(room_id, umo)
+        if not sub_config:
+            yield event.plain_result(
+                f"⚠️ 当前群还没有订阅直播间 {room_id}\n"
+                f"请先使用 /douyu sub {room_id} 订阅"
+            )
+            return
+
+        current = sub_config.high_value_only
 
         if enable.lower() == "on":
             new_status = True
@@ -602,16 +644,16 @@ class Main(star.Star):
         else:
             new_status = not current
 
-        self.data.update_room(room_id, high_value_only=new_status)
+        self.data.update_subscription_config(room_id, umo, high_value_only=new_status)
 
         if new_status:
             yield event.plain_result(
                 f"✅ 直播间 {room_info.name}({room_id})\n"
-                f"🎁 礼物过滤: 仅播报高价值礼物（飞机及以上）"
+                f"当前群的 🎁 礼物过滤: 仅播报高价值礼物（飞机及以上）"
             )
         else:
             yield event.plain_result(
                 f"✅ 直播间 {room_info.name}({room_id})\n"
-                f"🎁 礼物过滤: 播报所有礼物"
+                f"当前群的 🎁 礼物过滤: 播报所有礼物"
             )
 
