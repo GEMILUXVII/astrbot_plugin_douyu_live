@@ -415,6 +415,39 @@ def test_resync_overflow_clamped(monkeypatch):
     asyncio.run(run())
 
 
+def test_room_not_found_uses_long_recheck_interval(monkeypatch):
+    """封禁/删除房间的对账结论按长间隔复查,不做秒级退避刷接口"""
+
+    async def run():
+        monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
+        from aiodouyu import RoomNotFound
+
+        async def gone_fetch_room(room_id, *, source, timeout):
+            raise RoomNotFound("房间不存在")
+
+        monkeypatch.setattr(monitor_mod, "fetch_room", gone_fetch_room)
+
+        client = FakeDanmakuClient()
+        m = DouyuMonitor(18, client_factory=lambda: client)
+        m.start()
+        from aiodouyu import EVENT_CONNECTED
+
+        client.push({"type": EVENT_CONNECTED, "roomid": "18"})
+        await asyncio.sleep(0.05)
+
+        assert m._resync_room_gone is True
+        assert m._resync_pending  # 仍会复查(封禁常为临时)
+        # 复查间隔是长间隔(30 分钟),不是秒级退避
+        import time as _time
+
+        assert m._resync_at - _time.monotonic() > 1000
+        assert m._resync_failures == 0  # 不计入瞬时故障退避
+
+        await m.stop()
+
+    asyncio.run(run())
+
+
 def test_consumer_exception_closes_client_and_reports_unhealthy():
     """消费循环意外异常:客户端必须被关闭,is_healthy 转 False 交给 watchdog"""
 

@@ -6,7 +6,13 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from aiodouyu import EVENT_CONNECTED, EVENT_DISCONNECTED, DanmakuClient, fetch_room
+from aiodouyu import (
+    EVENT_CONNECTED,
+    EVENT_DISCONNECTED,
+    DanmakuClient,
+    RoomNotFound,
+    fetch_room,
+)
 from astrbot.api import logger
 
 # 状态对账固定用 betard 源:open 源无法识别视频轮播,会把轮播误判为开播
@@ -17,6 +23,9 @@ RESYNC_TIMEOUT = 10.0
 # 的修复在 betard 偶发故障时留下缺口
 RESYNC_RETRY_BASE = 5.0
 RESYNC_RETRY_MAX = 60.0
+# 对账返回"房间不存在"(封禁/删除)是确定性结论而非瞬时故障:
+# 按长间隔复查(封禁常为临时),不按秒级退避打接口刷日志
+RESYNC_ROOM_GONE_INTERVAL = 1800.0
 # 冷却期待定状态的校准周期(秒)
 RECONCILE_INTERVAL = 1.0
 # stop() 等待消费协程退出的上限(秒)
@@ -111,6 +120,7 @@ class DouyuMonitor:
         self._resync_pending = False  # 有一次对账待执行
         self._resync_at = 0.0  # monotonic,早于此不执行
         self._resync_failures = 0
+        self._resync_room_gone = False  # 上次对账返回房间不存在
         # 新鲜度基线:fetch 在途期间状态机前进(_obs_seq)或连接更替
         # (_conn_gen)时,带回的快照可能过期,须丢弃重拉
         self._obs_seq = 0
@@ -258,6 +268,9 @@ class DouyuMonitor:
 
     def _reconcile_pending(self) -> None:
         """冷却结束后校准待定状态(由校准协程周期调用)"""
+        if self._stop_flag:
+            # 与其他状态机入口保持一致:stop 后不再产生任何回调
+            return
         try:
             if self._pending_status is None:
                 return
@@ -306,6 +319,17 @@ class DouyuMonitor:
             info = await fetch_room(
                 self.room_id, source=RESYNC_SOURCE, timeout=RESYNC_TIMEOUT
             )
+        except RoomNotFound as e:
+            # 确定性结论:房间被封禁/删除。长间隔复查,状态变化时只告警一次
+            self._schedule_resync(RESYNC_ROOM_GONE_INTERVAL)
+            if not self._resync_room_gone:
+                self._resync_room_gone = True
+                logger.warning(
+                    f"斗鱼直播间 {self.room_id} 对账返回房间不存在"
+                    f"(可能被封禁或删除),改为每"
+                    f" {RESYNC_ROOM_GONE_INTERVAL / 60:.0f} 分钟复查: {e}"
+                )
+            return
         except Exception as e:
             self._resync_failures += 1
             # 指数须钳制:计数无界增长时 2**n 的 int->float 转换会在
@@ -323,6 +347,7 @@ class DouyuMonitor:
             return
         self._resync_pending = False
         self._resync_failures = 0
+        self._resync_room_gone = False
         if self._stop_flag:
             return
         if seq_before != self._obs_seq or gen_before != self._conn_gen:
@@ -434,15 +459,14 @@ class DouyuMonitor:
                     await client.close()
             task = self._task
             if task is not None and not task.done():
-                try:
-                    await asyncio.wait_for(
-                        asyncio.shield(task), timeout=STOP_TIMEOUT
-                    )
-                except (asyncio.TimeoutError, TimeoutError):
+                # 用 asyncio.wait 而非 wait_for+shield:wait 不取消被等
+                # 任务、超时不抛异常,也没有 shield 的歧义——若任务被
+                # 第三方取消,shield 的 await 会抛 CancelledError,被外层
+                # 误判为 stop() 自身被取消而向调用方虚假传播
+                done, pending = await asyncio.wait({task}, timeout=STOP_TIMEOUT)
+                if pending:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
-                except Exception:
-                    pass
         except asyncio.CancelledError:
             # 调用方自身被取消(可能落在 close 或 wait 的任意挂起点):
             # 先把消费协程也取消掉再传播,避免任务与连接脱管
