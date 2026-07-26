@@ -48,6 +48,22 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.prep.outputs.checkout_ref }}
 
+      - name: Verify version consistency
+        env:
+          TAG: ${{ steps.prep.outputs.tag_name }}
+        run: |
+          META_VER="$(sed -n 's/^version:[[:space:]]*//p' metadata.yaml | tr -d '\"' | tr -d "'")"
+          PY_VER="$(sed -n 's/^version = \"\(.*\)\"/\1/p' pyproject.toml | head -1)"
+          echo "tag=${TAG} metadata=${META_VER} pyproject=${PY_VER}"
+          if [ "v${META_VER}" != "${TAG}" ]; then
+            echo "Tag ${TAG} does not match metadata.yaml version ${META_VER}" >&2
+            exit 1
+          fi
+          if [ "${PY_VER}" != "${META_VER}" ]; then
+            echo "pyproject.toml version ${PY_VER} does not match metadata.yaml ${META_VER}" >&2
+            exit 1
+          fi
+
       - name: Build release archive
         env:
           ARCHIVE_NAME: ${{ steps.prep.outputs.archive_name }}
@@ -58,7 +74,7 @@ jobs:
             -x ".venv/*" \
             -x "__pycache__/*" \
             -x "*/__pycache__/*" \
-            -x "LOGO.png" \
+            -x "tests/*" \
             -x "uv.lock"
 
       - name: Publish GitHub Release
