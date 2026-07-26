@@ -10,7 +10,12 @@ def test_no_gift_residue(make_main):
     assert not hasattr(m, "_on_gift")
 
 
-def test_queue_retries_only_failed_targets(make_main):
+def test_queue_retries_only_failed_targets(make_main, monkeypatch):
+    """失败目标按退避重试，且只重试失败的目标"""
+    import astrbot_plugin_douyu_live.main as main_mod
+
+    # 缩小退避让测试窗口内能观察到重试；真实值为 5/15/45/120s
+    monkeypatch.setattr(main_mod, "NOTIFY_RETRY_BACKOFF_BASE", 0.2)
     m = make_main()
     calls = []
 
@@ -34,6 +39,36 @@ def test_queue_retries_only_failed_targets(make_main):
     asyncio.run(run())
     assert calls and set(calls[0]) == {"good", "bad"}
     assert len(calls) >= 2 and set(calls[1]) == {"bad"}
+
+
+def test_retry_backoff_schedule():
+    """退避序列 5/15/45/120 且封顶"""
+    from astrbot_plugin_douyu_live.main import _retry_backoff
+
+    assert [_retry_backoff(n) for n in (1, 2, 3, 4, 5)] == [
+        5.0, 15.0, 45.0, 120.0, 120.0,
+    ]
+
+
+def test_dedup_recorded_only_after_enqueue(make_main):
+    """队满丢弃时不得记录去重时间戳（否则窗口内补发被误吸收）"""
+    m = make_main()
+    m.data.add_room(900, RoomInfo(name="F"))
+    m.data.subscribe(900, "umoF")
+
+    # 塞满队列
+    import astrbot_plugin_douyu_live.main as main_mod
+
+    while m._notification_queue.qsize() < main_mod.NOTIFY_QUEUE_MAX:
+        m._notification_queue.put_nowait(main_mod.PendingNotification())
+
+    m._on_live_start(900, {})  # 队满 -> 丢弃，且不应记 dedup
+    assert ("live", 900) not in m._notify_dedup
+
+    # 腾出空间后窗口内补发必须放行
+    m._notification_queue.get_nowait()
+    m._on_live_start(900, {})
+    assert ("live", 900) in m._notify_dedup
 
 
 def test_notify_dedup_window(make_main):

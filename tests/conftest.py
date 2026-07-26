@@ -1,7 +1,9 @@
-"""pytest 共享夹具：注入 astrbot / pydouyu / httpx 桩模块
+"""pytest 共享夹具：注入 astrbot 桩模块
 
 插件运行在 AstrBot 宿主内；单元测试不依赖宿主，在导入任何插件模块之前
 把最小桩模块塞进 sys.modules（因此桩注入必须在 conftest 顶层执行）。
+aiodouyu 是真实依赖（pip install aiodouyu），不打桩；监控器测试通过
+client_factory 注入假弹幕客户端。
 
 注意：仓库检出目录名必须与包名一致（astrbot_plugin_douyu_live），
 测试通过包导入方式加载插件模块。
@@ -85,46 +87,6 @@ class GreedyStr(str):
     pass
 
 
-class _StubAsyncClient:
-    def __init__(self, **kwargs):
-        pass
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *args):
-        return False
-
-    async def get(self, url):
-        raise RuntimeError("单元测试禁用网络")
-
-
-class FakeWorker:
-    def __init__(self):
-        self.alive = True
-
-    def is_alive(self):
-        return self.alive
-
-
-class FakeClient:
-    """pydouyu Client 桩：不联网，仅记录 handler 注册与启停"""
-
-    def __init__(self, room_id):
-        self.room_id = room_id
-        self.handlers = {}
-        self.message_worker = FakeWorker()
-
-    def add_handler(self, key, fn):
-        self.handlers[key] = fn
-
-    def start(self):
-        pass
-
-    def stop(self):
-        self.message_worker.alive = False
-
-
 def _install_stubs() -> None:
     api_mod = types.ModuleType("astrbot.api")
     api_mod.logger = _Logger()
@@ -159,14 +121,6 @@ def _install_stubs() -> None:
     core_star_filter_command_mod = types.ModuleType("astrbot.core.star.filter.command")
     core_star_filter_command_mod.GreedyStr = GreedyStr
 
-    httpx_mod = types.ModuleType("httpx")
-    httpx_mod.AsyncClient = _StubAsyncClient
-
-    pydouyu_mod = types.ModuleType("pydouyu")
-    pydouyu_client_mod = types.ModuleType("pydouyu.client")
-    pydouyu_client_mod.Client = FakeClient
-    pydouyu_mod.client = pydouyu_client_mod
-
     for name, mod in {
         "astrbot": astrbot_mod,
         "astrbot.core": core_mod,
@@ -178,9 +132,6 @@ def _install_stubs() -> None:
         "astrbot.api.event": event_mod,
         "astrbot.api.event.filter": filter_mod,
         "astrbot.api.message_components": comp_mod,
-        "httpx": httpx_mod,
-        "pydouyu": pydouyu_mod,
-        "pydouyu.client": pydouyu_client_mod,
     }.items():
         sys.modules[name] = mod
 
@@ -197,8 +148,61 @@ class FakeTime:
     def time(self):
         return self.now
 
+    def monotonic(self):
+        return self.now
+
     def sleep(self, seconds):
         self.now += seconds
+
+
+class FakeDanmakuClient:
+    """aiodouyu.DanmakuClient 替身：消息由测试脚本注入，不联网
+
+    复刻真实客户端的关键语义：close() 立即唤醒阻塞中的消费者并终止迭代、
+    close 幂等、同一实例只允许一个消费迭代器、close 后再迭代抛
+    ConnectionClosed——防止假客户端掩盖对真实库的误用。
+    """
+
+    def __init__(self):
+        import asyncio
+
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self.closed = False
+        self._iterating = False
+
+    def push(self, msg: dict) -> None:
+        """注入一条消息给消费方"""
+        self._queue.put_nowait(msg)
+
+    def push_error(self, exc: Exception) -> None:
+        """注入一个异常，消费方在迭代中收到时原样抛出"""
+        self._queue.put_nowait(exc)
+
+    async def close(self) -> None:
+        self.closed = True
+        self._queue.put_nowait(None)  # 终止哨兵
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        from aiodouyu import ConnectionClosed
+
+        if self._iterating:
+            raise RuntimeError("同一客户端只允许一个消费迭代器")
+        if self.closed:
+            raise ConnectionClosed("客户端已关闭")
+        self._iterating = True
+        try:
+            while True:
+                msg = await self._queue.get()
+                if msg is None or self.closed:
+                    return
+                if isinstance(msg, Exception):
+                    raise msg
+                yield msg
+        finally:
+            self._iterating = False
 
 
 @pytest.fixture

@@ -1,12 +1,12 @@
 [project]
 name = "astrbot-plugin-douyu-live"
-version = "2.0.0"
+version = "2.1.0"
 description = "An AstrBot plugin designed to monitor Douyu live streams and send real-time notifications."
 readme = "README.md"
 requires-python = ">=3.10"
 # 注意：AstrBot 实际按 requirements.txt 安装依赖，此处仅为工具链声明，
 # CI 会校验两处保持一致
-dependencies = ["pydouyu==0.0.7", "httpx>=0.24.0"]
+dependencies = ["aiodouyu>=0.1.0"]
 
 # 与 AstrBot 主仓库的 ruff 规则保持一致（插件单独 clone 时不再依赖宿主配置）
 [tool.ruff]

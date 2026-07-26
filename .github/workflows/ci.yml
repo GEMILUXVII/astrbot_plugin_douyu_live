@@ -22,8 +22,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install tooling
-        run: pip install ruff pytest
+      - name: Install tooling and dependencies
+        # aiodouyu 须已发布到 PyPI（https://github.com/GEMILUXVII/aiodouyu）
+        run: pip install ruff pytest -r requirements.txt
 
       - name: Lint
         run: ruff check .

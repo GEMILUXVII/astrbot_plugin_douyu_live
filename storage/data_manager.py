@@ -26,7 +26,8 @@ class DataManager:
     数据存储在 JSON 文件中，写入为原子操作并保留上一代备份。
 
     线程安全：
-        pydouyu 回调线程与 asyncio 事件循环线程会并发读写本类，
+        数据变更经 asyncio.to_thread 移出事件循环执行（磁盘 I/O），
+        工作线程与事件循环线程会并发读写本类，
         所有对内部字典的访问都由 self._lock 保护；磁盘 I/O 在独立的
         _io_lock 下进行，不占用 _lock。
     """
@@ -70,8 +71,13 @@ class DataManager:
 
     @staticmethod
     def _parse_room_id(key: Any) -> int | None:
-        """解析 JSON 键为房间号；非法键返回 None（不抛异常）"""
-        if isinstance(key, str) and key.isdigit():
+        """解析 JSON 键为房间号；非法键返回 None（不抛异常）
+
+        必须限定 ASCII：str.isdigit() 对 "²"/"①" 等 Unicode 数字字符
+        返回 True 但 int() 会抛 ValueError，手工编辑过的数据文件含此类
+        键时会让整个 load() 崩溃、插件无法启动。
+        """
+        if isinstance(key, str) and key.isascii() and key.isdigit():
             return int(key)
         logger.warning(f"跳过非法房间号键: {key!r}")
         return None

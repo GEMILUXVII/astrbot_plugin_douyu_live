@@ -41,6 +41,27 @@ def test_corrupt_without_backup_quarantines_not_wipes(data_dir):
     assert dm.save() is True  # 隔离成功后允许继续写入
 
 
+def test_unicode_digit_keys_skipped_not_fatal(data_dir):
+    """"²"/"①" 等 isdigit()=True 但 int() 抛异常的键必须跳过而非崩溃加载（回归）"""
+    payload = {
+        "room_info": {
+            "²": {"name": "evil"},
+            "①": {"name": "evil2"},
+            "123": {"name": "ok"},
+        },
+        "subscriptions": {"²": {"umoA": {"at_all": False}}},
+        "unsub_history": {"①": {}},
+    }
+    (data_dir / "douyu_live_data.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+    dm = DataManager()  # 此前在这里直接 ValueError 崩溃
+    assert 123 in dm.room_info
+    assert dm.room_info[123].name == "ok"
+    assert all(isinstance(k, int) for k in dm.room_info)
+    assert dm.subscriptions == {}
+
+
 def test_valid_json_wrong_shape_treated_as_corrupt(data_dir):
     """合法 JSON 但顶层非 dict（null/[]）必须走隔离+备份回退（回归：覆盖完好 .bak）"""
     dm = DataManager()

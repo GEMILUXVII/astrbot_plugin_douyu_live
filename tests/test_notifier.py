@@ -21,6 +21,21 @@ def test_sanitize_empty_falls_back():
 def test_sanitize_c1_and_bidi():
     assert "\x85" not in sanitize_display_text("a\x85b")  # U+0085 NEL
     assert "‮" not in sanitize_display_text("a‮b")  # bidi override
+    # bidi isolate（Trojan-Source 载体）、方向标记与零宽字符必须一并移除
+    for ch in [
+        "⁦",  # LRI
+        "⁧",  # RLI
+        "⁨",  # FSI
+        "⁩",  # PDI
+        "‎",  # LRM
+        "‏",  # RLM
+        "؜",  # ALM
+        "​",  # ZWSP
+        "‍",  # ZWJ
+        "⁠",  # WJ
+        "﻿",  # BOM/ZWNBSP
+    ]:
+        assert ch not in sanitize_display_text(f"a{ch}b"), f"U+{ord(ch):04X} 泄漏"
 
 
 def test_offline_duration_formats():

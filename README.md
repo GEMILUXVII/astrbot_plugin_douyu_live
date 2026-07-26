@@ -67,7 +67,7 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 
 2. **重启/重载 AstrBot**
 
-   在 WebUI 重载插件，或直接重启 AstrBot。AstrBot 会自动安装所需依赖（`pydouyu`、`httpx`）。
+   在 WebUI 重载插件，或直接重启 AstrBot。AstrBot 会自动安装所需依赖（[`aiodouyu`](https://github.com/GEMILUXVII/aiodouyu)）。
 
 ## 命令列表
 
@@ -209,7 +209,7 @@ A: v2.0.0 起，重启监控会继承直播状态，不再对正在直播的房�
 - [AstrBot 官方文档](https://astrbot.app/)
 - [AstrBot 插件开发指南](https://docs.astrbot.app/dev/star/plugin-new.html)
 - [斗鱼直播](https://www.douyu.com/)
-- [pydouyu](https://github.com/Kexiii/pydouyu)
+- [aiodouyu](https://github.com/GEMILUXVII/aiodouyu) — 本插件使用的斗鱼弹幕/房间信息 asyncio 库
 
 ## 许可证
 
