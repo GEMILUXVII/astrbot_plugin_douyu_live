@@ -498,6 +498,44 @@ def test_room_not_found_uses_long_recheck_interval(monkeypatch):
     asyncio.run(run())
 
 
+def test_reconnect_does_not_reset_room_gone_recheck(monkeypatch):
+    """重连不得把 RoomNotFound 的 30 分钟复查间隔打回立即执行"""
+
+    async def run():
+        monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
+        from aiodouyu import RoomNotFound
+
+        calls = []
+
+        async def gone_fetch_room(room_id, *, source, timeout):
+            calls.append(1)
+            raise RoomNotFound("房间不存在")
+
+        monkeypatch.setattr(monitor_mod, "fetch_room", gone_fetch_room)
+
+        client = FakeDanmakuClient()
+        m = DouyuMonitor(20, client_factory=lambda: client)
+        m.start()
+        from aiodouyu import EVENT_CONNECTED, EVENT_DISCONNECTED
+
+        client.push({"type": EVENT_CONNECTED, "roomid": "20"})
+        await asyncio.sleep(0.05)
+        assert calls == [1] and m._resync_room_gone
+        recheck_at = m._resync_at
+
+        # 空闲超时导致的断连-重连循环
+        client.push({"type": EVENT_DISCONNECTED, "roomid": "20"})
+        client.push({"type": EVENT_CONNECTED, "roomid": "20"})
+        await asyncio.sleep(0.05)
+
+        assert calls == [1]  # 复查排程未被重连重置,没有第二次 fetch
+        assert m._resync_at == recheck_at
+
+        await m.stop()
+
+    asyncio.run(run())
+
+
 def test_consumer_exception_closes_client_and_reports_unhealthy():
     """消费循环意外异常:客户端必须被关闭,is_healthy 转 False 交给 watchdog"""
 

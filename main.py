@@ -592,7 +592,14 @@ class Main(star.Star):
             self.data.subscribe, room_id, umo, operator
         )
         if not success:
-            yield event.plain_result(f"⚠️ 你已经订阅了直播间 {room_id}")
+            # False 有两义:已订阅,或房间恰在命令处理期间被管理员删除
+            # (数据层在锁内判存,不会再产生孤立订阅)
+            if not self.data.has_room(room_id):
+                yield event.plain_result(
+                    f"⚠️ 直播间 {room_id} 刚被移出监控列表,订阅未生效"
+                )
+            else:
+                yield event.plain_result(f"⚠️ 你已经订阅了直播间 {room_id}")
             return
 
         # 审计日志：记录订阅操作者

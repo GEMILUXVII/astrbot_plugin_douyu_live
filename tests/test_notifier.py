@@ -68,3 +68,20 @@ def test_send_failure_classification():
         n.send_to_subscribers({"ok": True, "boom": False, "noplatform": False}, "hi")
     )
     assert failed == {"boom"}
+
+
+def test_send_timeout_counts_as_failed(monkeypatch):
+    """挂起的发送按超时计入 failed 走上层退避重试(纵深防御)"""
+    import astrbot_plugin_douyu_live.core.notifier as notifier_mod
+
+    monkeypatch.setattr(notifier_mod, "SEND_TIMEOUT", 0.05)
+
+    class Ctx:
+        async def send_message(self, umo, result):
+            if umo == "stuck":
+                await asyncio.sleep(30)  # 无超时的第三方适配器挂死
+            return True
+
+    n = Notifier(context=Ctx())
+    failed = asyncio.run(n.send_to_subscribers({"ok": True, "stuck": False}, "hi"))
+    assert failed == {"stuck"}

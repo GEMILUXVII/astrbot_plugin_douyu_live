@@ -414,8 +414,16 @@ class DouyuMonitor:
                     self._conn_gen += 1
                     # 对账登记给校准协程执行,不在消费循环内联 await:
                     # 消费不被 HTTP 阻塞(rss 照常处理,过期快照由
-                    # 新鲜度校验丢弃),对账请求也不会因重试在途而丢失
-                    self._schedule_resync()
+                    # 新鲜度校验丢弃),对账请求也不会因重试在途而丢失。
+                    # 例外:房间不存在的长间隔复查排程不被重连重置——
+                    # 重连不是房间恢复的证据,重连循环(空闲超时约 2 分钟
+                    # 一次)会把 30 分钟复查打回分钟级刷接口
+                    if not (
+                        self._resync_room_gone
+                        and self._resync_pending
+                        and time.monotonic() < self._resync_at
+                    ):
+                        self._schedule_resync()
                     logger.info(
                         f"斗鱼监控器 {self.room_id} 弹幕连接就绪,已登记状态对账"
                     )

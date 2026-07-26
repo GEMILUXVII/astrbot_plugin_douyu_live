@@ -15,6 +15,10 @@ if TYPE_CHECKING:
 
 # 单条通知扇出时的最大并发发送数
 SEND_CONCURRENCY = 5
+# 单个目标的发送超时(秒):in-tree 适配器自带 15-300s 超时,此为纵深
+# 防御,把单个慢/死目标对串行通知队列的队头阻塞压到有界(第三方或
+# 未来适配器的超时行为未知)
+SEND_TIMEOUT = 30.0
 
 
 class Notifier:
@@ -142,7 +146,10 @@ class Notifier:
                         result.chain.append(AtAll())
                         result.chain.append(Plain("\n"))
                     result.chain.append(Plain(message))
-                    ok = await self.context.send_message(umo, result)
+                    ok = await asyncio.wait_for(
+                        self.context.send_message(umo, result),
+                        timeout=SEND_TIMEOUT,
+                    )
                     if ok:
                         logger.debug(f"已发送通知到: {umo} (at_all={at_all})")
                     else:

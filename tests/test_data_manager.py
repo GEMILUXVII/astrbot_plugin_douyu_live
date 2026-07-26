@@ -215,8 +215,12 @@ def test_unsub_history_skips_default_and_caps(data_dir):
 
 
 def test_remove_room_cleans_orphans_and_history(data_dir):
+    from astrbot_plugin_douyu_live.models.subscription import SubscriptionConfig
+
     dm = DataManager()
-    dm.subscribe(300, "umoOrphan")  # 无房间记录的孤立订阅
+    # 孤立订阅只能来自旧版数据文件(subscribe 已在锁内判存拒绝创建),
+    # 直接构造内存状态模拟
+    dm.subscriptions[300] = {"umoOrphan": SubscriptionConfig()}
     assert dm.remove_room(300) is True
     assert 300 not in dm.subscriptions
     assert dm.remove_room(999) is False
@@ -230,6 +234,57 @@ def test_remove_room_cleans_orphans_and_history(data_dir):
     dm.room_info.pop(400, None)
     assert dm.remove_room(400) is True
     assert 400 not in dm.unsub_history
+
+
+def test_subscribe_rejects_missing_room(data_dir):
+    """subscribe 在数据层锁内判存:与 remove_room 竞争不再重建孤立订阅"""
+    dm = DataManager()
+    assert dm.subscribe(12345, "umoX") == (False, False)
+    assert 12345 not in dm.subscriptions
+
+    dm.add_room(12345, RoomInfo(name="A"))
+    assert dm.subscribe(12345, "umoX")[0] is True
+    # 删除房间后订阅立即失效(锁内原子)
+    dm.remove_room(12345)
+    assert dm.subscribe(12345, "umoY") == (False, False)
+    assert 12345 not in dm.subscriptions
+
+
+def test_corrupt_backup_also_quarantined(data_dir):
+    """主备双损:两份文件都被隔离,损坏备份不再被后续保存轮转覆盖"""
+    (data_dir / "douyu_live_data.json").write_text("NOT JSON", encoding="utf-8")
+    (data_dir / "douyu_live_data.json.bak").write_text("{broken", encoding="utf-8")
+    dm = DataManager()
+    assert dm.room_info == {}
+    corrupt = sorted(p.name for p in data_dir.glob("*.corrupt.*"))
+    assert len(corrupt) == 2  # 主 + 备份均被隔离
+    assert any(".bak.corrupt." in n for n in corrupt)
+    # 备份隔离不阻断写入(禁写只保护无法隔离的主文件)
+    assert dm.save() is True
+
+
+def test_write_blocked_protects_unquarantinable_file(data_dir, monkeypatch):
+    """隔离失败 -> 禁写最后防线:拒绝一切保存,原文件原封未动(回归覆盖)"""
+    import os as os_mod
+
+    (data_dir / "douyu_live_data.json").write_text("PRECIOUS RAW", encoding="utf-8")
+    real_replace = os_mod.replace
+
+    def replace_blocking_quarantine(src, dst):
+        # 只让隔离(目标名含 .corrupt.)那次失败,模拟文件被占用
+        if ".corrupt." in str(dst):
+            raise OSError("文件被其他进程占用")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os_mod, "replace", replace_blocking_quarantine)
+    dm = DataManager()  # 构造不抛异常
+    assert dm._write_blocked is True
+    assert dm.save() is False
+    assert dm.last_save_ok is False
+    # 原文件内容必须原封未动
+    assert (data_dir / "douyu_live_data.json").read_text(
+        encoding="utf-8"
+    ) == "PRECIOUS RAW"
 
 
 def test_room_name_sanitized_on_load(data_dir):

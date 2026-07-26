@@ -85,18 +85,28 @@ class DataManager:
         logger.warning(f"跳过非法房间号键: {key!r}")
         return None
 
-    def _quarantine(self, path: Path) -> None:
-        """隔离疑似损坏的数据文件，避免后续保存覆盖它"""
+    def _quarantine(self, path: Path, block_on_failure: bool = True) -> None:
+        """隔离疑似损坏的数据文件，避免后续保存覆盖它
+
+        Args:
+            path: 待隔离的文件
+            block_on_failure: 隔离失败时是否禁写。主文件隔离失败必须
+                禁写保护原文件；备份文件隔离失败只记日志（禁写会把
+                健康的主文件也一并冻结）
+        """
         try:
             target = path.with_name(f"{path.name}.corrupt.{int(time.time())}")
             os.replace(path, target)
             logger.error(f"已将疑似损坏的数据文件隔离至 {target.name}，可手动恢复")
         except OSError as e:
-            # 连隔离都失败（如文件被占用）：禁止写入，保护原文件
-            self._write_blocked = True
-            logger.error(
-                f"无法隔离损坏的数据文件，已禁用自动保存以保护原文件: {e}"
-            )
+            if block_on_failure:
+                # 连隔离都失败（如文件被占用）：禁止写入，保护原文件
+                self._write_blocked = True
+                logger.error(
+                    f"无法隔离损坏的数据文件，已禁用自动保存以保护原文件: {e}"
+                )
+            else:
+                logger.error(f"无法隔离损坏的备份文件 {path.name}: {e}")
 
     def load(self) -> None:
         """从文件加载数据，兼容旧格式
@@ -134,6 +144,10 @@ class DataManager:
                     logger.error(f"读取数据文件 {path.name} 失败: {e}")
                     if path == self.data_file:
                         self._quarantine(path)
+                    else:
+                        # 备份损坏同样隔离:不隔离的话第二次保存的轮转会
+                        # 静默覆盖它,而它可能是唯一还能手工抢救数据的副本
+                        self._quarantine(path, block_on_failure=False)
 
             if raw is None:
                 return
@@ -410,6 +424,11 @@ class DataManager:
         from ..models.subscription import SubscriptionConfig as SubConfigClass
 
         with self._lock:
+            # 存在性判定必须在锁内:命令层的"先 get_room 判存再订阅"与
+            # remove_room 并发时,窗口内的订阅会重建已删房间的孤立订阅
+            # 并落盘(用户收到"订阅成功"但永远收不到通知)
+            if room_id not in self.room_info:
+                return False, False
             bucket = self.subscriptions.setdefault(room_id, {})
             if umo in bucket:
                 return False, False
