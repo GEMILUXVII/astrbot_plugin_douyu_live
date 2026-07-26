@@ -76,20 +76,17 @@ class Notifier:
         room_name = sanitize_display_text(room_name)
 
         lines = [
-            "🎉 斗鱼直播开播通知",
-            "━━━━━━━━━━━━━━",
-            f"👤 主播: {room_name}",
+            "【斗鱼开播提醒】",
+            f"主播: {room_name}",
         ]
         if title:
-            lines.append(f"📺 标题: {sanitize_display_text(title, max_len=48)}")
+            lines.append(f"标题: {sanitize_display_text(title, max_len=48)}")
         if category:
-            lines.append(f"🎮 分类: {sanitize_display_text(category, max_len=16)}")
+            lines.append(f"分类: {sanitize_display_text(category, max_len=16)}")
         lines += [
-            f"🔢 房间号: {room_id}",
-            f"⏰ 时间: {time_str}",
-            f"🔗 链接: {live_url}",
-            "━━━━━━━━━━━━━━",
-            "快去观看吧！",
+            f"房间号: {room_id}",
+            f"开播时间: {time_str}",
+            f"直播间: {live_url}",
         ]
         return "\n".join(lines)
 
@@ -129,14 +126,11 @@ class Notifier:
             duration_str = "未知"
 
         return (
-            f"📴 斗鱼直播下播通知\n"
-            f"━━━━━━━━━━━━━━\n"
-            f"👤 主播: {room_name}\n"
-            f"🔢 房间号: {room_id}\n"
-            f"⏱️ 本次直播时长: {duration_str}\n"
-            f"⏰ 下播时间: {time_str}\n"
-            f"━━━━━━━━━━━━━━\n"
-            f"感谢观看，下次再见！"
+            f"【斗鱼下播提醒】\n"
+            f"主播: {room_name}\n"
+            f"房间号: {room_id}\n"
+            f"本次直播时长: {duration_str}\n"
+            f"下播时间: {time_str}"
         )
 
     async def send_to_subscribers(

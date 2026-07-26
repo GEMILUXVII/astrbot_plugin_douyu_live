@@ -38,6 +38,25 @@ def test_sanitize_c1_and_bidi():
         assert ch not in sanitize_display_text(f"a{ch}b"), f"U+{ord(ch):04X} 泄漏"
 
 
+def test_notifications_are_emoji_free():
+    """通知面保持纯文本:emoji 在正式推送里不专业(回归锁)"""
+    import unicodedata
+
+    n = Notifier(context=None)
+    messages = [
+        n.build_notification(9999, "主播A", title="标题", category="DOTA2"),
+        n.build_notification(9999, "主播A"),
+        n.build_offline_notification(9999, "主播A", 7325),
+    ]
+    for msg in messages:
+        for ch in msg:
+            # Symbol-other 覆盖绝大多数 emoji/图形符号;中文与常规标点不在其中
+            assert unicodedata.category(ch) != "So", (
+                f"通知含图形符号 {ch!r} (U+{ord(ch):04X}): {msg!r}"
+            )
+        assert "━" not in msg  # 装饰性分隔线也一并去掉
+
+
 def test_offline_duration_formats():
     n = Notifier(context=None)
     assert "未知" in n.build_offline_notification(1, "a", 0)

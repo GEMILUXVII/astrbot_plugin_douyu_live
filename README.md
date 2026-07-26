@@ -11,7 +11,7 @@
 <br>
 
 <div align="center">
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-v2.2.1-9644F4?style=for-the-badge" alt="Version"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-v2.2.2-9644F4?style=for-the-badge" alt="Version"></a>
   <a href="https://github.com/GEMILUXVII/astrbot_plugin_douyu_live/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-E53935?style=for-the-badge" alt="License"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"></a>
   <a href="https://github.com/AstrBotDevs/AstrBot"><img src="https://img.shields.io/badge/AstrBot-Compatible-00BFA5?style=for-the-badge&logo=robot&logoColor=white" alt="AstrBot Compatible"></a>
@@ -135,31 +135,32 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 
 ## 通知样例
 
+通知采用纯文本排版，不含 emoji 与装饰性分隔线。
+
 ### 开播通知
 
 ```
 @全体成员
-🎉 斗鱼直播开播通知
-━━━━━━━━━━━━━━
-👤 主播: 某主播
-🔢 房间号: 12725169
-⏰ 时间: 2024-01-01 20:00:00
-🔗 链接: https://www.douyu.com/12725169
-━━━━━━━━━━━━━━
-快去观看吧！
+【斗鱼开播提醒】
+主播: 某主播
+标题: 今天来点新活
+分类: 英雄联盟
+房间号: 12725169
+开播时间: 2026-07-27 20:00:00
+直播间: https://www.douyu.com/12725169
 ```
+
+> 标题与分类由通知富化提供（可在插件配置中关闭）；封面图作为独立的
+> 图片消息随通知一并发送，拉取失败时自动降级为上述纯文本。
 
 ### 下播通知
 
 ```
-📴 斗鱼直播下播通知
-━━━━━━━━━━━━━━
-👤 主播: 某主播
-🔢 房间号: 12725169
-⏱️ 本次直播时长: 45分钟
-⏰ 下播时间: 2025-12-02 21:02:53
-━━━━━━━━━━━━━━
-感谢观看，下次再见！
+【斗鱼下播提醒】
+主播: 某主播
+房间号: 12725169
+本次直播时长: 45分钟
+下播时间: 2026-07-27 21:02:53
 ```
 
 ## 数据存储
