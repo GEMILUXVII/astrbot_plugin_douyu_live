@@ -20,4 +20,4 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "aiodouyu", specifier = ">=0.1.0" }]
+requires-dist = [{ name = "aiodouyu", specifier = ">=0.1.0,<0.2" }]
