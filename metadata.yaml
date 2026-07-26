@@ -3,7 +3,7 @@ display_name: 斗鱼开播通知
 desc: 全自动监控多房间开播/下播并推送订阅通知
 short_desc: 斗鱼开播/下播订阅通知
 author: GEMILUXVII
-version: 2.1.3
+version: 2.2.0
 repo: "https://github.com/GEMILUXVII/astrbot_plugin_douyu_live"
 # 插件使用了 astrbot.core.star.filter.command.GreedyStr 等内部 API，
 # 由版本闸门拦截不兼容的宿主版本（当前在 4.25.x 上开发测试）

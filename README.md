@@ -11,7 +11,7 @@
 <br>
 
 <div align="center">
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-v2.1.3-9644F4?style=for-the-badge" alt="Version"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-v2.2.0-9644F4?style=for-the-badge" alt="Version"></a>
   <a href="https://github.com/GEMILUXVII/astrbot_plugin_douyu_live/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-E53935?style=for-the-badge" alt="License"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"></a>
   <a href="https://github.com/AstrBotDevs/AstrBot"><img src="https://img.shields.io/badge/AstrBot-Compatible-00BFA5?style=for-the-badge&logo=robot&logoColor=white" alt="AstrBot Compatible"></a>
@@ -91,11 +91,19 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 
 | 命令                    | 说明           | 示例                    |
 | ----------------------- | -------------- | ----------------------- |
+| `/douyu help`           | 命令帮助       | `/douyu help`           |
 | `/douyu ls`             | 查看监控列表   | `/douyu ls`             |
+| `/douyu live`           | 查看当前在播   | `/douyu live`           |
 | `/douyu sub <房间号>`   | 订阅直播间通知 | `/douyu sub 12725169`   |
 | `/douyu unsub <房间号>` | 取消订阅       | `/douyu unsub 12725169` |
+| `/douyu offline <房间号> [on/off]` | 本群下播通知开关 | `/douyu offline 12725169 off` |
 | `/douyu mysub`          | 查看我的订阅   | `/douyu mysub`          |
 | `/douyu status`         | 查看监控状态   | `/douyu status`         |
+
+> 2.2.0 起支持 WebUI 插件配置(通知富化/封面图/重启补播报/通知冷却/
+> 订阅权限档位/场次保留天数),见 AstrBot 管理面板的插件配置页。
+> 开播通知默认附带直播间标题、分类与封面图;场次历史落盘于插件数据
+> 目录 `sessions/`,供后续统计功能使用。
 
 ## 使用示例
 

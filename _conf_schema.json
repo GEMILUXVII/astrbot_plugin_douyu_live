@@ -1,0 +1,39 @@
+{
+  "notify_enrich": {
+    "description": "开播通知富化:附带直播间标题与分类(需访问斗鱼接口)",
+    "type": "bool",
+    "hint": "关闭后通知只含主播名/房间号/时间/链接",
+    "default": true
+  },
+  "notify_cover": {
+    "description": "开播通知附带直播间封面图",
+    "type": "bool",
+    "hint": "依赖通知富化开启;部分平台不支持图片消息时自动降级为纯文本",
+    "default": true
+  },
+  "catchup_announce": {
+    "description": "宿主重启后,对仍在直播中的房间补发一次开播通知",
+    "type": "bool",
+    "hint": "关闭后重启期间已在播的房间不再补发(只影响宿主重启,不影响断连补偿)",
+    "default": true
+  },
+  "notify_cooldown": {
+    "description": "同一房间两次状态通知之间的最小间隔(秒)",
+    "type": "int",
+    "hint": "抖动抑制窗口;期间的真实转换会在冷却结束后补发",
+    "default": 30
+  },
+  "subscribe_permission": {
+    "description": "订阅类命令(sub/unsub/offline)的权限档位",
+    "type": "string",
+    "options": ["everyone", "admin"],
+    "hint": "公共部署可设为 admin 防止任意群成员刷订阅",
+    "default": "everyone"
+  },
+  "session_log_retention_days": {
+    "description": "场次历史(JSONL)保留天数",
+    "type": "int",
+    "hint": "超期场次在启动时清理;0 表示关闭场次落盘",
+    "default": 90
+  }
+}

@@ -12,10 +12,12 @@ class SubscriptionConfig:
 
     Attributes:
         at_all: 是否开启 @全体成员（开播通知）
+        offline_notify: 是否接收下播通知（默认开，按群关闭降噪）
         subscribed_by: 订阅操作者 ID（审计用）
     """
 
     at_all: bool = False
+    offline_notify: bool = True
     subscribed_by: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -31,5 +33,7 @@ class SubscriptionConfig:
         """
         return cls(
             at_all=bool(data.get("at_all", False)),
+            # 旧数据无此字段时默认开,与新订阅一致
+            offline_notify=bool(data.get("offline_notify", True)),
             subscribed_by=str(data.get("subscribed_by", "")),
         )

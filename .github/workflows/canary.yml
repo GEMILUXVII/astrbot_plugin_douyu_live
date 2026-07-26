@@ -1,0 +1,56 @@
+name: canary
+
+# 每周对 AstrBot master 跑一次插件测试:插件依赖宿主内部 API
+# (GreedyStr 等),上游变更第一时间报警而非等用户报障。
+# 失败只代表"宿主 master 出现不兼容变更",不阻塞插件自身 CI。
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"  # 每周一 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  against-astrbot-master:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: astrbot_plugin_douyu_live
+
+      - name: Checkout AstrBot master
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: AstrBotDevs/AstrBot
+          path: AstrBot
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install pytest -r astrbot_plugin_douyu_live/requirements.txt
+
+      - name: Probe host internal APIs
+        # 插件依赖的宿主内部符号:任何一个消失即报警
+        run: |
+          cd AstrBot
+          pip install -r requirements.txt --quiet || true
+          python - <<'EOF'
+          import sys
+          sys.path.insert(0, ".")
+          from astrbot.core.star.filter.command import GreedyStr  # noqa: F401
+          from astrbot.api.message_components import AtAll, Image, Plain  # noqa: F401
+          from astrbot.api.event import MessageEventResult  # noqa: F401
+          print("host internal APIs present")
+          EOF
+
+      - name: Run plugin tests
+        run: |
+          cd astrbot_plugin_douyu_live
+          pytest tests/ -q

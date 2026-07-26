@@ -55,6 +55,8 @@ class DouyuMonitor:
         offline_callback: Callable[[int, float], None] | None = None,
         inherit_state: dict[str, Any] | None = None,
         client_factory: Callable[[], DanmakuClient] | None = None,
+        notify_cooldown: float = 30.0,
+        announce_initial_live: bool = True,
     ):
         """初始化监控器
 
@@ -66,6 +68,10 @@ class DouyuMonitor:
                 避免对已播报过的直播间重复发送开播通知
             client_factory: 弹幕客户端工厂(测试注入用);默认创建
                 只订阅 rss、产出连接事件的 DanmakuClient
+            notify_cooldown: 同一房间两次通知的最小间隔(秒)
+            announce_initial_live: 首次观测(无继承状态)发现已在播时是否
+                补发开播通知。False 时静默记录状态(该场次的下播同样
+                不通知,与"未播报过的场次不发下播"的既有语义一致)
         """
         self.room_id = room_id
         self.live_callback = live_callback
@@ -84,7 +90,8 @@ class DouyuMonitor:
         self._has_announced_live = False  # 是否已发布开播通知
         # 上次通知时间,防止短时间内重复通知
         self._last_notify_time: float = 0.0
-        self._notify_cooldown = 30.0  # 通知冷却时间(秒)
+        self._notify_cooldown = notify_cooldown  # 通知冷却时间(秒)
+        self._announce_initial_live = announce_initial_live
         # 冷却期内观测到的待定状态,冷却结束后由 _reconcile_pending 补处理
         self._pending_status: bool | None = None
         self._pending_msg: dict | None = None
@@ -237,12 +244,22 @@ class DouyuMonitor:
                 self.last_live_status = is_live
                 if is_live:
                     self.live_start_time = started_at or now
-                    self._has_announced_live = True
-                    self._last_notify_time = now
-                    logger.info(f"斗鱼直播间 {self.room_id} 开播了! (初始状态)")
-                    if self.live_callback:
-                        callback = self.live_callback
-                        args = (self.room_id, msg)
+                    if self._announce_initial_live:
+                        self._has_announced_live = True
+                        self._last_notify_time = now
+                        logger.info(
+                            f"斗鱼直播间 {self.room_id} 开播了! (初始状态)"
+                        )
+                        if self.live_callback:
+                            callback = self.live_callback
+                            args = (self.room_id, msg)
+                    else:
+                        # catchup_announce 关闭:静默记录在播状态,本场
+                        # 不补发开播;因未播报,该场下播同样不会通知
+                        logger.info(
+                            f"斗鱼直播间 {self.room_id} 已在播(补播报已关闭,"
+                            f"静默接管)"
+                        )
             elif is_live == self.last_live_status:
                 # 状态回稳(等于当前状态),清除待定转换
                 self._pending_status = None

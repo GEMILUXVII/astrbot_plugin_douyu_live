@@ -20,7 +20,9 @@ def test_queue_retries_only_failed_targets(make_main, monkeypatch):
     calls = []
 
     class FakeNotifier:
-        async def send_to_subscribers(self, settings, message, use_at_all=True):
+        async def send_to_subscribers(
+            self, settings, message, use_at_all=True, cover_url=None
+        ):
             calls.append(dict(settings))
             return {u for u in settings if u == "bad"} if len(calls) < 3 else set()
 

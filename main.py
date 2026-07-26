@@ -15,6 +15,8 @@ from astrbot.core.star.filter.command import GreedyStr
 from .core import DouyuMonitor, Notifier
 from .models import RoomInfo
 from .storage import DataManager
+from .storage.session_log import MonitorStateStore, SessionLog
+from .utils.ratelimit import RoomInfoCache
 from .utils.text import sanitize_display_text
 
 # 通知最大发送尝试次数（含首次发送，即最多重试 NOTIFY_MAX_RETRIES-1 轮）
@@ -34,14 +36,37 @@ NOTIFY_DEDUP_TTL = 10.0
 WATCHDOG_INTERVAL = 60.0
 WATCHDOG_STARTUP_GRACE = 30.0
 
+# 配置默认值:_conf_schema.json 是 WebUI 载体,这里是运行时兜底
+# (宿主未传 config、或旧宿主不支持 schema 时按默认运行)
+DEFAULT_CONFIG = {
+    "notify_enrich": True,
+    "notify_cover": True,
+    "catchup_announce": True,
+    "notify_cooldown": 30,
+    "subscribe_permission": "everyone",
+    "session_log_retention_days": 90,
+}
+
 
 @dataclass
 class PendingNotification:
-    """待发送的通知"""
+    """待发送的通知
+
+    2.2.0 起携带结构化事件而非成品消息:消息在队列处理器侧(事件循环、
+    可 await)首次投递前构建,富化外呼不占用监控回调路径。
+    message 字段保留兼容:非空时跳过构建直接发送。
+    """
     subscriber_settings: dict[str, bool] = field(default_factory=dict)  # {umo -> at_all}
     message: str = ""
     retry_count: int = 0
     next_attempt_at: float = 0.0  # monotonic 时间，早于此不投递
+    # ---- 结构化事件(kind 非空时生效)----
+    kind: str = ""  # "live" | "offline"
+    room_id: int = 0
+    room_name: str = ""
+    duration: float = 0.0  # offline: 直播时长(秒)
+    event_ts: float = 0.0  # 事件发生时刻(epoch)
+    cover_url: str | None = None  # 构建时填充
 
 
 def _retry_backoff(retry_count: int) -> float:
@@ -56,25 +81,40 @@ class Main(star.Star):
     """斗鱼直播开播通知插件
 
     命令列表:
+    - /douyu help - 命令帮助
     - /douyu add <房间号> [名称] - 添加监控直播间（管理员）
     - /douyu del <房间号> - 删除监控直播间（管理员）
     - /douyu ls - 查看监控列表
+    - /douyu live - 查看当前在播房间
     - /douyu sub <房间号> - 订阅直播间开播通知
     - /douyu unsub <房间号> - 取消订阅
+    - /douyu offline <房间号> [on/off] - 本群下播通知开关
     - /douyu mysub - 查看我的订阅
     - /douyu status - 查看监控状态
     - /douyu restart [房间号] - 重启监控（管理员）
     - /douyu atall <房间号> [on/off] - 设置@全体（管理员）
     """
 
-    def __init__(self, context: star.Context) -> None:
+    def __init__(self, context: star.Context, config=None) -> None:
         super().__init__(context)
         self.context = context
+        # AstrBotConfig(dict 语义);宿主无 schema 支持时为 None
+        self.conf = config if config is not None else {}
 
         # 初始化模块
         self.data = DataManager()
         self.notifier = Notifier(context)
         self.monitors: dict[int, DouyuMonitor] = {}
+        # 外呼缓存:/douyu live 与通知富化共用,TTL 60s + 并发 5
+        self._room_cache = RoomInfoCache()
+        # 场次历史与监控状态快照
+        self.sessions = SessionLog(
+            self.data.data_dir,
+            retention_days=int(self._cfg("session_log_retention_days")),
+        )
+        self._state_store = MonitorStateStore(self.data.data_dir)
+        # 启动回灌的监控状态(load 后按房间一次性消费)
+        self._boot_states: dict[int, dict] = {}
 
         # 通知队列：监控协程投递，队列处理任务串行发送。
         # 统一走队列保证发送顺序、限制并发，并承担带退避的重试。
@@ -97,6 +137,11 @@ class Main(star.Star):
     async def initialize(self) -> None:
         """插件激活时启动所有监控"""
         self._closing = False
+        # 回灌上次干净关停的监控状态(一次性),清理超期场次
+        self._boot_states = await asyncio.to_thread(
+            self._state_store.load_and_clear
+        )
+        await asyncio.to_thread(self.sessions.prune)
         # 启动通知队列处理与监控看门狗任务
         self._queue_processor_task = asyncio.create_task(
             self._process_notification_queue()
@@ -128,17 +173,29 @@ class Main(star.Star):
         self._queue_processor_task = None
         self._watchdog_task = None
 
-        # 并发停止所有监控
-        monitors = list(self.monitors.values())
+        # 并发停止所有监控;停止后导出状态快照供下次启动回灌
+        monitor_map = dict(self.monitors)
         self.monitors.clear()
-        if monitors:
+        if monitor_map:
             await asyncio.gather(
-                *(m.stop() for m in monitors), return_exceptions=True
+                *(m.stop() for m in monitor_map.values()), return_exceptions=True
+            )
+            await asyncio.to_thread(
+                self._state_store.save,
+                {rid: m.export_state() for rid, m in monitor_map.items()},
             )
         # 注：数据在每次变更时已即时保存，此处无需（也不应）再次保存
         logger.info("斗鱼直播通知插件已停止")
 
     # ==================== 监控管理 ====================
+
+    def _cfg(self, key: str):
+        """读配置项,缺失时回退默认值"""
+        try:
+            value = self.conf.get(key)
+        except Exception:
+            value = None
+        return DEFAULT_CONFIG[key] if value is None else value
 
     def _new_monitor(
         self, room_id: int, inherit_state: dict | None = None
@@ -149,6 +206,8 @@ class Main(star.Star):
             live_callback=self._on_live_start,
             offline_callback=self._on_live_end,
             inherit_state=inherit_state,
+            notify_cooldown=float(self._cfg("notify_cooldown")),
+            announce_initial_live=bool(self._cfg("catchup_announce")),
         )
 
     def _room_lock(self, room_id: int) -> asyncio.Lock:
@@ -165,7 +224,11 @@ class Main(star.Star):
                 self.monitors[room_id] = existing
                 return True
 
-            state = existing.export_state() if existing else None
+            state = (
+                existing.export_state()
+                if existing
+                else self._boot_states.pop(room_id, None)  # 启动回灌,一次性
+            )
             if existing:
                 # 覆盖前显式清理旧监控，即使它已不健康（幂等安全）
                 await existing.stop()
@@ -275,10 +338,16 @@ class Main(star.Star):
                         due_items.append(item)
 
                 for item in due_items:
-                    # 多轮重试后降级 @全体，降低风控概率
+                    if not item.message:
+                        await self._build_notification_message(item)
+                    # 多轮重试后降级:先弃封面图(可能被平台拒收),再弃 @全体
                     use_at_all = item.retry_count < 2
+                    cover = item.cover_url if item.retry_count < 1 else None
                     failed = await self.notifier.send_to_subscribers(
-                        item.subscriber_settings, item.message, use_at_all=use_at_all
+                        item.subscriber_settings,
+                        item.message,
+                        use_at_all=use_at_all,
+                        cover_url=cover,
                     )
                     if not failed:
                         continue
@@ -309,19 +378,84 @@ class Main(star.Star):
             except Exception as e:
                 logger.error(f"通知队列处理器出错: {e}", exc_info=True)
 
+    def _log_session_event(
+        self,
+        kind: str,
+        room_id: int,
+        event_ts: float,
+        title: str = "",
+        category: str = "",
+        duration: float = 0.0,
+    ) -> None:
+        """场次事件落盘(fire-and-forget,失败只记日志)"""
+        if not self.sessions.enabled:
+            return
+        if kind == "start":
+            event = {"e": "start", "ts": event_ts, "title": title, "cat": category}
+        else:
+            event = {"e": "end", "ts": event_ts, "dur": round(duration, 1)}
+        task = asyncio.create_task(
+            asyncio.to_thread(self.sessions.append, room_id, event)
+        )
+        task.add_done_callback(lambda t: t.exception())  # 取回异常防未观察警告
+
+    async def _build_notification_message(self, item: PendingNotification) -> None:
+        """在队列侧构建通知文本(首次投递前调用一次)
+
+        开播通知按配置富化(标题/分类/封面):外呼走 TTL 缓存 + 并发
+        限制,失败降级为基础文本,不阻塞、不失败。
+        """
+        if item.kind == "live":
+            title = category = None
+            if self._cfg("notify_enrich"):
+                try:
+                    info = await self._room_cache.get(item.room_id, timeout=5.0)
+                    title, category = info.title, info.category
+                    if self._cfg("notify_cover"):
+                        item.cover_url = info.cover_url
+                except Exception as e:
+                    logger.warning(
+                        f"直播间 {item.room_id} 通知富化失败,降级为基础文本: {e}"
+                    )
+            item.message = self.notifier.build_notification(
+                item.room_id,
+                item.room_name,
+                timestamp=item.event_ts or None,
+                title=title,
+                category=category,
+            )
+            # 场次落盘:开播事件(带富化到的标题/分类)
+            self._log_session_event(
+                "start", item.room_id, item.event_ts,
+                title=title or "", category=category or "",
+            )
+        elif item.kind == "offline":
+            item.message = self.notifier.build_offline_notification(
+                item.room_id,
+                item.room_name,
+                item.duration,
+                timestamp=item.event_ts or None,
+            )
+            self._log_session_event(
+                "end", item.room_id, item.event_ts, duration=item.duration
+            )
+
     def _schedule_notification(
         self,
         subscriber_settings: dict[str, bool],
-        message: str,
+        message: str = "",
         dedup_key: tuple[str, int] | None = None,
+        **fields,
     ) -> None:
         """调度通知发送（仅在事件循环上调用）
 
         Args:
             subscriber_settings: {umo -> at_all} 每个订阅者的 @全体设置
-            message: 通知消息内容
+            message: 预构建消息(留空则按 fields 的结构化事件在队列侧构建)
             dedup_key: (类型, 房间号)。同键通知在 NOTIFY_DEDUP_TTL 秒内
                 只投递一次——吸收重启交接等场景产生的重复事件
+            **fields: PendingNotification 的结构化事件字段
+                (kind/room_id/room_name/duration/event_ts)
         """
         if not subscriber_settings:
             return
@@ -336,7 +470,9 @@ class Main(star.Star):
         try:
             self._notification_queue.put_nowait(
                 PendingNotification(
-                    subscriber_settings=subscriber_settings, message=message
+                    subscriber_settings=subscriber_settings,
+                    message=message,
+                    **fields,
                 )
             )
         except asyncio.QueueFull:
@@ -356,8 +492,7 @@ class Main(star.Star):
     # ==================== 监控回调（运行于事件循环）====================
 
     def _on_live_start(self, room_id: int, msg: dict) -> None:
-        """开播回调 - 发送通知给所有订阅者"""
-        # 获取所有订阅者的配置
+        """开播回调 - 登记结构化事件,消息在队列侧构建(含富化)"""
         sub_configs = self.data.get_all_subscription_configs(room_id)
         if not sub_configs:
             return
@@ -365,15 +500,16 @@ class Main(star.Star):
         room_info = self.data.get_room(room_id)
         room_name = room_info.name if room_info else f"房间{room_id}"
 
-        notification = self.notifier.build_notification(room_id, room_name)
-
-        # 构建每个订阅者的 at_all 设置
         subscriber_settings = {
             umo: config.at_all for umo, config in sub_configs.items()
         }
-
         self._schedule_notification(
-            subscriber_settings, notification, dedup_key=("live", room_id)
+            subscriber_settings,
+            dedup_key=("live", room_id),
+            kind="live",
+            room_id=room_id,
+            room_name=room_name,
+            event_ts=time.time(),
         )
 
     def _on_live_end(self, room_id: int, duration_seconds: float) -> None:
@@ -390,15 +526,21 @@ class Main(star.Star):
         room_info = self.data.get_room(room_id)
         room_name = room_info.name if room_info else f"房间{room_id}"
 
-        notification = self.notifier.build_offline_notification(
-            room_id, room_name, duration_seconds
-        )
-
-        # 下播通知不 @全体
-        subscriber_settings = dict.fromkeys(sub_configs.keys(), False)
+        # 下播通知不 @全体;且只发给未关闭下播通知的群
+        subscriber_settings = {
+            umo: False
+            for umo, config in sub_configs.items()
+            if getattr(config, "offline_notify", True)
+        }
 
         self._schedule_notification(
-            subscriber_settings, notification, dedup_key=("offline", room_id)
+            subscriber_settings,
+            dedup_key=("offline", room_id),
+            kind="offline",
+            room_id=room_id,
+            room_name=room_name,
+            duration=duration_seconds,
+            event_ts=time.time(),
         )
 
     # ==================== 命令辅助 ====================
@@ -452,12 +594,89 @@ class Main(star.Star):
         )
         return room_info, new_status, None
 
+    def _subscribe_gate(self, event: AstrMessageEvent) -> str | None:
+        """订阅类命令的权限档位检查;返回错误文案或 None(放行)
+
+        运行时检查而非 @filter.permission_type:装饰器是静态的,
+        无法跟随配置切换。
+        """
+        if self._cfg("subscribe_permission") != "admin":
+            return None
+        try:
+            if event.is_admin():
+                return None
+        except Exception:
+            return None  # 宿主无此 API 时不拦截,宁可放行
+        return "⚠️ 当前实例已将订阅操作限制为管理员,请联系管理员代为操作"
+
     # ==================== 命令组 ====================
 
     @filter.command_group("douyu")
     def douyu(self):
         """斗鱼直播通知命令组"""
+        # 裸 /douyu 由宿主框架直接回复自动命令树(组过滤器在唤醒阶段
+        # 拦截,本函数体不会被执行);详细说明走 /douyu help
         pass
+
+    @douyu.command("help")
+    async def douyu_help(self, event: AstrMessageEvent):
+        """查看命令帮助"""
+        lines = [
+            "📖 斗鱼开播通知 - 命令帮助",
+            "━━━━━━━━━━━━━━",
+            "订阅(所有人):",
+            "  /douyu ls - 查看监控列表",
+            "  /douyu live - 查看当前在播的房间",
+            "  /douyu sub <房间号> - 订阅开播通知",
+            "  /douyu unsub <房间号> - 取消订阅",
+            "  /douyu offline <房间号> [on/off] - 本群下播通知开关",
+            "  /douyu mysub - 查看本群订阅",
+            "  /douyu status - 监控总览",
+        ]
+        is_admin = False
+        try:
+            is_admin = bool(event.is_admin())
+        except Exception:
+            pass
+        if is_admin:
+            lines += [
+                "管理(管理员):",
+                "  /douyu add <房间号> [名称] - 添加监控",
+                "  /douyu del <房间号> - 删除监控",
+                "  /douyu restart [房间号] - 重启监控",
+                "  /douyu atall <房间号> [on/off] - 本群 @全体开关",
+            ]
+        lines.append("状态图例: 🟢 运行中 / 🟡 重连中 / 🔴 已停止")
+        yield event.plain_result("\n".join(lines))
+
+    @douyu.command("offline")
+    async def douyu_offline(
+        self, event: AstrMessageEvent, room_id: int, enable: str = ""
+    ):
+        """开启/关闭当前群的下播通知
+
+        此设置只对当前群生效。下播通知默认开启。
+
+        Args:
+            room_id: 斗鱼直播间房间号
+            enable: on/off 或留空切换状态
+        """
+        gate = self._subscribe_gate(event)
+        if gate:
+            yield event.plain_result(gate)
+            return
+        room_info, new_status, error = await self._resolve_toggle(
+            room_id, event.unified_msg_origin, "offline_notify", enable
+        )
+        if error:
+            yield event.plain_result(error)
+            return
+
+        status_text = "开启" if new_status else "关闭"
+        yield event.plain_result(
+            f"✅ 直播间 {room_info.name}({room_id})\n"
+            f"当前群的下播通知已{status_text}{self._save_warning()}"
+        )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @douyu.command("add")
@@ -575,9 +794,57 @@ class Main(star.Star):
 
         yield event.plain_result("\n".join(lines))
 
+    @douyu.command("live")
+    async def douyu_live(self, event: AstrMessageEvent):
+        """查看当前在播的房间"""
+        # 在播判定用内存状态机(rss+对账维护,权威),HTTP 只做富化
+        live_rooms = [
+            (rid, m) for rid, m in self.monitors.items() if m.last_live_status
+        ]
+        if not live_rooms:
+            yield event.plain_result(
+                "😴 当前没有监控中的房间在播\n使用 /douyu ls 查看监控列表"
+            )
+            return
+
+        infos = await asyncio.gather(
+            *(self._room_cache.get(rid) for rid, _ in live_rooms),
+            return_exceptions=True,
+        )
+        now = time.time()
+        lines = ["🔴 当前在播", "━━━━━━━━━━━━━━"]
+        for (rid, monitor), info in zip(live_rooms, infos):
+            room = self.data.get_room(rid)
+            name = room.name if room else str(rid)
+            duration = ""
+            if monitor.live_start_time:
+                mins = int(max(0.0, now - monitor.live_start_time) // 60)
+                duration = (
+                    f"已播 {mins // 60}小时{mins % 60}分钟"
+                    if mins >= 60
+                    else f"已播 {mins}分钟"
+                )
+            url = f"https://www.douyu.com/{rid}"
+            if isinstance(info, BaseException):
+                # 富化失败降级:只显示名称与时长,不阻塞命令
+                lines.append(f"• {name}\n  {duration} · {url}")
+            else:
+                title = sanitize_display_text(info.title)
+                category = (
+                    f" [{sanitize_display_text(info.category, max_len=16)}]"
+                    if info.category
+                    else ""
+                )
+                lines.append(f"• {name}{category}\n  {title}\n  {duration} · {url}")
+        yield event.plain_result("\n".join(lines))
+
     @douyu.command("sub")
     async def douyu_sub(self, event: AstrMessageEvent, room_id: int):
         """订阅直播间开播通知"""
+        gate = self._subscribe_gate(event)
+        if gate:
+            yield event.plain_result(gate)
+            return
         room_info = self.data.get_room(room_id)
         if not room_info:
             yield event.plain_result(
@@ -620,6 +887,10 @@ class Main(star.Star):
     @douyu.command("unsub")
     async def douyu_unsub(self, event: AstrMessageEvent, room_id: int):
         """取消订阅直播间"""
+        gate = self._subscribe_gate(event)
+        if gate:
+            yield event.plain_result(gate)
+            return
         umo = event.unified_msg_origin
         room_info = self.data.get_room(room_id)
         room_name = room_info.name if room_info else str(room_id)

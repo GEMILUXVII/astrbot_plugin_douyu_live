@@ -83,6 +83,15 @@ class Plain:
         self.text = text
 
 
+class Image:
+    def __init__(self, file=""):
+        self.file = file
+
+    @classmethod
+    def fromURL(cls, url):
+        return cls(file=url)
+
+
 class GreedyStr(str):
     pass
 
@@ -111,6 +120,7 @@ def _install_stubs() -> None:
     comp_mod = types.ModuleType("astrbot.api.message_components")
     comp_mod.AtAll = AtAll
     comp_mod.Plain = Plain
+    comp_mod.Image = Image
 
     astrbot_mod = types.ModuleType("astrbot")
     astrbot_mod.api = api_mod
