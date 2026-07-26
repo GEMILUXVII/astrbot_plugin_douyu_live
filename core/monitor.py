@@ -90,6 +90,9 @@ class DouyuMonitor:
         self._pending_msg: dict | None = None
         # 待定转换若来自对账观测,保留其开播时间戳供补发时修正时长基准
         self._pending_started_at: float | None = None
+        # 待定转换的观测时刻:补发下播时以它为时长终点,时长不含
+        # 冷却延迟(否则单场虚增最多约"冷却 30s + tick + 对账在途")
+        self._pending_observed_at: float | None = None
 
         if inherit_state:
             self.last_live_status = inherit_state.get("last_live_status")
@@ -104,6 +107,7 @@ class DouyuMonitor:
             self._pending_status = inherit_state.get("pending_status")
             self._pending_msg = inherit_state.get("pending_msg")
             self._pending_started_at = inherit_state.get("pending_started_at")
+            self._pending_observed_at = inherit_state.get("pending_observed_at")
 
         # ---- 生命周期 ----
         self._stop_flag = False
@@ -147,14 +151,23 @@ class DouyuMonitor:
             "pending_status": self._pending_status,
             "pending_msg": self._pending_msg,
             "pending_started_at": self._pending_started_at,
+            "pending_observed_at": self._pending_observed_at,
         }
 
     # ==================== 状态机 ====================
 
     def _apply_transition(
-        self, is_live: bool, msg: dict, now: float
+        self, is_live: bool, msg: dict, now: float, event_time: float | None = None
     ) -> tuple[Callable | None, tuple]:
         """执行一次状态转换
+
+        Args:
+            is_live: 目标状态
+            msg: 事件消息
+            now: 当前时刻(通知冷却基准,补发场景必须用补发时刻,
+                否则下一个冷却窗被压缩)
+            event_time: 转换的实际观测时刻;下播时长以它为终点
+                (缺省用 now)
 
         Returns:
             (callback, args): 需要调用的回调及参数,无则 (None, ())
@@ -163,6 +176,7 @@ class DouyuMonitor:
         self._pending_status = None
         self._pending_msg = None
         self._pending_started_at = None
+        self._pending_observed_at = None
         self.last_live_status = is_live
 
         if is_live:
@@ -178,7 +192,9 @@ class DouyuMonitor:
         logger.info(f"斗鱼直播间 {self.room_id} 下播了!")
         duration = 0.0
         if self.live_start_time:
-            duration = now - self.live_start_time
+            duration = (event_time if event_time is not None else now) - self.live_start_time
+            if duration < 0:
+                duration = 0.0
             self.live_start_time = None
         announced = self._has_announced_live
         self._has_announced_live = False
@@ -232,6 +248,7 @@ class DouyuMonitor:
                 self._pending_status = None
                 self._pending_msg = None
                 self._pending_started_at = None
+                self._pending_observed_at = None
                 # 对账源可修正开播时间(如断连窗口内先下播又开播的场景
                 # 无法逐段还原,至少让时长基于最新一场)
                 if is_live and started_at is not None:
@@ -243,6 +260,7 @@ class DouyuMonitor:
                 self._pending_status = is_live
                 self._pending_msg = msg
                 self._pending_started_at = started_at
+                self._pending_observed_at = now
                 logger.debug(
                     f"斗鱼直播间 {self.room_id} 状态变化处于冷却期内,"
                     f"已记为待定状态,冷却结束后校准"
@@ -282,13 +300,20 @@ class DouyuMonitor:
                 self._pending_status = None
                 self._pending_msg = None
                 self._pending_started_at = None
+                self._pending_observed_at = None
                 return
             logger.info(f"斗鱼直播间 {self.room_id} 冷却结束,补发待定状态转换")
-            if self._pending_status and self._pending_started_at is not None:
-                # 补发开播时用观测源的开播时间,时长不含冷却延迟
-                self.live_start_time = self._pending_started_at
+            if self._pending_status:
+                # 补发开播:优先观测源的开播时间,退化用观测时刻,
+                # 两者都让时长不含冷却补发延迟
+                start_base = self._pending_started_at or self._pending_observed_at
+                if start_base is not None:
+                    self.live_start_time = start_base
             callback, args = self._apply_transition(
-                self._pending_status, self._pending_msg or {}, now
+                self._pending_status,
+                self._pending_msg or {},
+                now,  # 冷却基准必须是补发时刻,不能缩短下一个冷却窗
+                event_time=self._pending_observed_at,
             )
             if callback:
                 callback(*args)

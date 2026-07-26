@@ -11,7 +11,7 @@
 <br>
 
 <div align="center">
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-v2.0.0-9644F4?style=for-the-badge" alt="Version"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-v2.1.3-9644F4?style=for-the-badge" alt="Version"></a>
   <a href="https://github.com/GEMILUXVII/astrbot_plugin_douyu_live/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-E53935?style=for-the-badge" alt="License"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"></a>
   <a href="https://github.com/AstrBotDevs/AstrBot"><img src="https://img.shields.io/badge/AstrBot-Compatible-00BFA5?style=for-the-badge&logo=robot&logoColor=white" alt="AstrBot Compatible"></a>
@@ -20,7 +20,7 @@
 <div align="center">
   <a href="https://www.douyu.com/"><img src="https://img.shields.io/badge/Douyu-Live-FF9800?style=for-the-badge&logo=livejournal&logoColor=white" alt="Douyu"></a>
   <a href="https://github.com/NapNeko/NapCatQQ"><img src="https://img.shields.io/badge/NapCat-QQ-2196F3?style=for-the-badge&logo=qq&logoColor=white" alt="NapCat"></a>
-  <a href="https://github.com/GEMILUXVII/astrbot_plugin_douyu_live/commits/master"><img src="https://img.shields.io/badge/updated-2026--07--26-0097A7?style=for-the-badge&logo=calendar&logoColor=white" alt="Last Updated"></a>
+  <a href="https://github.com/GEMILUXVII/astrbot_plugin_douyu_live/commits/master"><img src="https://img.shields.io/badge/updated-2026--07--27-0097A7?style=for-the-badge&logo=calendar&logoColor=white" alt="Last Updated"></a>
 </div>
 
 <br>
@@ -43,6 +43,11 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 - **@全体成员**：支持开播时自动 @全体成员（可选）
 - **下播通知**：自动推送下播提醒并附带当次直播时长
 - **抗抖动机制**：内置状态冷却、重试与自动恢复，避免重复或漏报
+- **断连补偿**：每次弹幕重连后自动用 HTTP 接口对账开播状态，补齐断连
+  窗口内丢失的开播/下播（对账失败按 5/10/20/40/60s 退避重试直到成功）
+- **可靠推送**：通知发送失败按 5/15/45/120s 指数退避重试，只补发失败目标
+- **状态透明**：`/douyu ls` 展示每个房间的监控状态——🟢 运行中 /
+  🟡 重连中（弹幕连接暂不可用，库在自动重连）/ 🔴 已停止
 - **自动获取主播名**：添加房间时自动从斗鱼获取主播名称
 - **数据持久化**：监控与订阅数据自动保存，重启不丢失
 - **权限控制**：添加/删除直播间需管理员权限
@@ -197,12 +202,21 @@ A: 请确保已开启 @全体成员，且机器人有群管理员权限，群设
 
 ### Q: 收不到开播通知
 
-A: 检查监控状态、订阅状态，必要时重启监控。
+A: 用 `/douyu ls` 查看状态：🟡 重连中表示弹幕连接暂不可用（网络或斗鱼
+侧问题，库会自动重连并在重连后对账补发）；🔴 已停止时 watchdog 会在
+1 分钟内自动重启监控。持续异常再手动 `/douyu restart`。
 
 ### Q: 重复收到通知
 
-A: v2.0.0 起，重启监控会继承直播状态，不再对正在直播的房间重复播报；
-主播端短暂闪断也由冷却校准机制处理。若仍出现重复，请附日志反馈 issue。
+A: 分两种情况：
+
+- **`/douyu restart` 或 watchdog 重启监控**（进程内）：v2.0.0 起继承直播
+  状态，不会对正在直播的房间重复播报；
+- **AstrBot 宿主重启**：若重启时主播仍在直播，会**补发一次**开播通知——
+  这是有意行为（1.3.0 起），且 2.1.0 迁移后由"偶发"变为必现（重连对账
+  必然检测到在播状态）。后续版本将随场次历史落盘改为可配置。
+
+主播端短暂闪断由冷却校准机制处理。上述之外的重复请附日志反馈 issue。
 
 ## 相关链接
 

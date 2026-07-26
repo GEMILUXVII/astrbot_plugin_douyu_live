@@ -28,7 +28,7 @@ def test_queue_retries_only_failed_targets(make_main, monkeypatch):
     m._schedule_notification({"good": True, "bad": False}, "msg")
 
     async def run():
-        task = asyncio.get_event_loop().create_task(m._process_notification_queue())
+        task = asyncio.create_task(m._process_notification_queue())
         await asyncio.sleep(2.2)
         task.cancel()
         try:

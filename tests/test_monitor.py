@@ -43,7 +43,8 @@ def test_cooldown_records_pending_and_reconciles(fake_time):
 
     fake_time.now = 1031.0
     m._reconcile_pending()  # 冷却结束，补发下播
-    assert events == [("live", 1), ("off", 1, 31)]
+    # 时长以观测时刻(1018)为终点,不含冷却补发延迟(2.1.3 修复)
+    assert events == [("live", 1), ("off", 1, 18)]
     assert m.last_live_status is False
 
     fake_time.now = 2000.0
@@ -108,7 +109,8 @@ def test_pending_state_survives_restart(fake_time):
     )
     fake_time.now = 1031.0
     m2._reconcile_pending()
-    assert events == [("off", 31)]
+    # 时长终点是观测时刻(1010),跨重启继承后依然不含补发延迟
+    assert events == [("off", 10)]
 
 
 def test_stop_flag_blocks_handlers():
