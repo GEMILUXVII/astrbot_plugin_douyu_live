@@ -1,7 +1,7 @@
 [project]
 name = "astrbot-plugin-douyu-live"
-version = "1.4.0"
+version = "2.0.0"
 description = "An AstrBot plugin designed to monitor Douyu live streams and send real-time notifications."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["pydouyu>=0.0.3", "httpx>=0.24.0"]
+dependencies = ["pydouyu==0.0.7", "httpx>=0.24.0"]

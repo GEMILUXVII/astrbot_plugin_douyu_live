@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag name (e.g. v1.3.0)"
+        description: "Tag name (e.g. v2.0.0)"
         required: true
-        default: "v1.3.0"
+        default: "v2.0.0"
 
 env:
   ARCHIVE_PREFIX: astrbot_plugin_douyu_live
@@ -23,13 +23,20 @@ jobs:
     steps:
       - name: Determine tag
         id: prep
+        env:
+          # 输入经环境变量传递，避免直接内插进 shell（表达式注入面）
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
+            TAG="${INPUT_TAG}"
             REF="refs/tags/${TAG}"
           else
             TAG="${GITHUB_REF_NAME}"
             REF="${GITHUB_REF}"
+          fi
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Invalid tag: $TAG (expected vX.Y.Z)" >&2
+            exit 1
           fi
           echo "tag_name=${TAG}" >> "$GITHUB_OUTPUT"
           echo "archive_name=${ARCHIVE_PREFIX}-${TAG}.zip" >> "$GITHUB_OUTPUT"
@@ -49,7 +56,10 @@ jobs:
             -x ".git/*" \
             -x ".github/workflows/*" \
             -x ".venv/*" \
-            -x "__pycache__/*"
+            -x "__pycache__/*" \
+            -x "*/__pycache__/*" \
+            -x "LOGO.png" \
+            -x "uv.lock"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
