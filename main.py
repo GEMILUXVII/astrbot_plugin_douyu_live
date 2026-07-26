@@ -549,7 +549,7 @@ class Main(star.Star):
         """数据保存失败时附加到回复中的警告"""
         if self.data.last_save_ok:
             return ""
-        return "\n⚠️ 数据保存失败，重启后此更改可能丢失，请检查磁盘空间与文件权限"
+        return "\n注意: 数据保存失败，重启后此更改可能丢失，请检查磁盘空间与文件权限"
 
     async def _resolve_toggle(
         self, room_id: int, umo: str, attr: str, enable: str
@@ -567,12 +567,12 @@ class Main(star.Star):
         """
         room_info = self.data.get_room(room_id)
         if not room_info:
-            return None, False, f"⚠️ 直播间 {room_id} 不在监控列表中"
+            return None, False, f"注意: 直播间 {room_id} 不在监控列表中"
 
         sub_config = self.data.get_subscription_config(room_id, umo)
         if not sub_config:
             return None, False, (
-                f"⚠️ 当前群还没有订阅直播间 {room_id}\n"
+                f"注意: 当前群还没有订阅直播间 {room_id}\n"
                 f"请先使用 /douyu sub {room_id} 订阅"
             )
 
@@ -586,7 +586,7 @@ class Main(star.Star):
         else:
             # 不认识的参数不能当"切换"处理——用户想强制开启时误触发
             # 取反会得到与预期相反的结果
-            return None, False, f"⚠️ 无法识别的参数「{enable}」，请使用 on/off 或留空切换"
+            return None, False, f"注意: 无法识别的参数「{enable}」，请使用 on/off 或留空切换"
 
         # 保存含磁盘 I/O，移出事件循环执行
         await asyncio.to_thread(
@@ -607,7 +607,7 @@ class Main(star.Star):
                 return None
         except Exception:
             return None  # 宿主无此 API 时不拦截,宁可放行
-        return "⚠️ 当前实例已将订阅操作限制为管理员,请联系管理员代为操作"
+        return "注意: 当前实例已将订阅操作限制为管理员,请联系管理员代为操作"
 
     # ==================== 命令组 ====================
 
@@ -622,9 +622,8 @@ class Main(star.Star):
     async def douyu_help(self, event: AstrMessageEvent):
         """查看命令帮助"""
         lines = [
-            "📖 斗鱼开播通知 - 命令帮助",
-            "━━━━━━━━━━━━━━",
-            "订阅(所有人):",
+            "【斗鱼开播通知 - 命令帮助】",
+                        "订阅(所有人):",
             "  /douyu ls - 查看监控列表",
             "  /douyu live - 查看当前在播的房间",
             "  /douyu sub <房间号> - 订阅开播通知",
@@ -674,7 +673,7 @@ class Main(star.Star):
 
         status_text = "开启" if new_status else "关闭"
         yield event.plain_result(
-            f"✅ 直播间 {room_info.name}({room_id})\n"
+            f"直播间 {room_info.name}({room_id})\n"
             f"当前群的下播通知已{status_text}{self._save_warning()}"
         )
 
@@ -688,11 +687,11 @@ class Main(star.Star):
             name: 直播间名称（可选，可含空格，不填则自动获取）
         """
         if room_id <= 0:
-            yield event.plain_result("⚠️ 房间号必须为正整数")
+            yield event.plain_result("注意: 房间号必须为正整数")
             return
 
         if self.data.has_room(room_id):
-            yield event.plain_result(f"⚠️ 直播间 {room_id} 已在监控列表中")
+            yield event.plain_result(f"注意: 直播间 {room_id} 已在监控列表中")
             return
 
         # 验证房间是否存在，同时获取主播名称。
@@ -703,20 +702,20 @@ class Main(star.Star):
             api_info = await fetch_room(room_id, source="auto")
         except RoomNotFound:
             yield event.plain_result(
-                f"⚠️ 直播间 {room_id} 不存在\n请检查房间号是否正确"
+                f"注意: 直播间 {room_id} 不存在\n请检查房间号是否正确"
             )
             return
         except ApiError as e:
             logger.warning(f"获取斗鱼直播间 {room_id} 信息失败: {e}")
             yield event.plain_result(
-                f"⚠️ 斗鱼接口暂时不可用，无法验证直播间 {room_id}\n请稍后重试"
+                f"注意: 斗鱼接口暂时不可用，无法验证直播间 {room_id}\n请稍后重试"
             )
             return
         except Exception as e:
             # 兜底:罕见的未映射网络异常不应让命令处理器抛裸异常
             logger.warning(f"获取斗鱼直播间 {room_id} 信息时发生未预期错误: {e}")
             yield event.plain_result(
-                f"⚠️ 斗鱼接口暂时不可用，无法验证直播间 {room_id}\n请稍后重试"
+                f"注意: 斗鱼接口暂时不可用，无法验证直播间 {room_id}\n请稍后重试"
             )
             return
 
@@ -738,7 +737,7 @@ class Main(star.Star):
         # 启动监控
         if await self._start_monitor(room_id):
             yield event.plain_result(
-                f"✅ 已添加直播间监控\n"
+                f"已添加直播间监控\n"
                 f"房间号: {room_id}\n"
                 f"名称: {room_name}\n"
                 f"使用 /douyu sub {room_id} 订阅开播通知"
@@ -746,7 +745,7 @@ class Main(star.Star):
             )
         else:
             await asyncio.to_thread(self.data.remove_room, room_id)
-            yield event.plain_result("❌ 启动监控失败，请查看日志获取详细错误")
+            yield event.plain_result("失败: 启动监控失败，请查看日志获取详细错误")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @douyu.command("del")
@@ -759,12 +758,12 @@ class Main(star.Star):
         removed = await asyncio.to_thread(self.data.remove_room, room_id)
         await self._stop_monitor(room_id)
         if not removed:
-            yield event.plain_result(f"⚠️ 直播间 {room_id} 不在监控列表中")
+            yield event.plain_result(f"注意: 直播间 {room_id} 不在监控列表中")
             return
 
         room_name = room_info.name if room_info else str(room_id)
         yield event.plain_result(
-            f"✅ 已删除直播间 {room_name}({room_id}) 的监控{self._save_warning()}"
+            f"已删除直播间 {room_name}({room_id}) 的监控{self._save_warning()}"
         )
 
     @douyu.command("ls")
@@ -772,10 +771,10 @@ class Main(star.Star):
         """查看监控列表"""
         rooms = self.data.get_all_rooms()
         if not rooms:
-            yield event.plain_result("📋 当前没有监控的直播间\n使用 /douyu add <房间号> 添加")
+            yield event.plain_result("当前没有监控的直播间\n使用 /douyu add <房间号> 添加")
             return
 
-        lines = ["📋 斗鱼直播监控列表", "━━━━━━━━━━━━━━"]
+        lines = ["【斗鱼监控列表】"]
         for idx, (room_id, info) in enumerate(rooms.items(), 1):
             sub_count = len(self.data.get_subscribers(room_id))
             monitor = self.monitors.get(room_id)
@@ -803,7 +802,7 @@ class Main(star.Star):
         ]
         if not live_rooms:
             yield event.plain_result(
-                "😴 当前没有监控中的房间在播\n使用 /douyu ls 查看监控列表"
+                "当前没有监控中的房间在播\n使用 /douyu ls 查看监控列表"
             )
             return
 
@@ -812,7 +811,7 @@ class Main(star.Star):
             return_exceptions=True,
         )
         now = time.time()
-        lines = ["🔴 当前在播", "━━━━━━━━━━━━━━"]
+        lines = ["【当前在播】"]
         for (rid, monitor), info in zip(live_rooms, infos):
             room = self.data.get_room(rid)
             name = room.name if room else str(rid)
@@ -848,7 +847,7 @@ class Main(star.Star):
         room_info = self.data.get_room(room_id)
         if not room_info:
             yield event.plain_result(
-                f"⚠️ 直播间 {room_id} 不在监控列表中\n"
+                f"注意: 直播间 {room_id} 不在监控列表中\n"
                 f"请联系管理员添加，或使用 /douyu ls 查看可订阅的直播间"
             )
             return
@@ -863,10 +862,10 @@ class Main(star.Star):
             # (数据层在锁内判存,不会再产生孤立订阅)
             if not self.data.has_room(room_id):
                 yield event.plain_result(
-                    f"⚠️ 直播间 {room_id} 刚被移出监控列表,订阅未生效"
+                    f"注意: 直播间 {room_id} 刚被移出监控列表,订阅未生效"
                 )
             else:
-                yield event.plain_result(f"⚠️ 你已经订阅了直播间 {room_id}")
+                yield event.plain_result(f"注意: 你已经订阅了直播间 {room_id}")
             return
 
         # 审计日志：记录订阅操作者
@@ -876,11 +875,11 @@ class Main(star.Star):
         monitor = self.monitors.get(room_id)
         status_tip = ""
         if not (monitor and monitor.is_healthy):
-            status_tip = "\n⚠️ 注意: 该直播间监控未运行，请联系管理员检查"
+            status_tip = "\n注意: 该直播间监控未运行，请联系管理员检查"
         restored_tip = "\n已自动恢复此前的订阅配置" if restored else ""
 
         yield event.plain_result(
-            f"✅ 订阅成功！\n直播间: {room_info.name}({room_id})\n"
+            f"订阅成功！\n直播间: {room_info.name}({room_id})\n"
             f"开播时将在此处收到通知{restored_tip}{status_tip}{self._save_warning()}"
         )
 
@@ -896,7 +895,7 @@ class Main(star.Star):
         room_name = room_info.name if room_info else str(room_id)
 
         if not await asyncio.to_thread(self.data.unsubscribe, room_id, umo):
-            yield event.plain_result(f"⚠️ 你没有订阅直播间 {room_id}")
+            yield event.plain_result(f"注意: 你没有订阅直播间 {room_id}")
             return
 
         # 审计日志：记录退订操作者（配置保留，重新订阅时恢复）
@@ -905,7 +904,7 @@ class Main(star.Star):
         )
 
         yield event.plain_result(
-            f"✅ 已取消订阅直播间 {room_name}({room_id})\n"
+            f"已取消订阅直播间 {room_name}({room_id})\n"
             f"订阅配置已保留，重新订阅时将自动恢复{self._save_warning()}"
         )
 
@@ -917,7 +916,7 @@ class Main(star.Star):
 
         if not room_ids:
             yield event.plain_result(
-                "📋 当前群还没有订阅任何直播间\n"
+                "当前群还没有订阅任何直播间\n"
                 "使用 /douyu ls 查看可订阅的直播间\n"
                 "使用 /douyu sub <房间号> 订阅"
             )
@@ -930,7 +929,7 @@ class Main(star.Star):
             # 获取当前群的订阅配置
             sub_config = self.data.get_subscription_config(room_id, umo)
             if sub_config:
-                at_all_icon = "✅" if sub_config.at_all else "❌"
+                at_all_icon = "开" if sub_config.at_all else "关"
                 my_subs.append(
                     f"• {room_name} ({room_id})\n  @全体:{at_all_icon}"
                 )
@@ -938,7 +937,7 @@ class Main(star.Star):
                 my_subs.append(f"• {room_name} ({room_id})")
 
         yield event.plain_result(
-            "📋 当前群的订阅列表\n━━━━━━━━━━━━━━\n" + "\n".join(my_subs)
+            "【本群订阅列表】\n" + "\n".join(my_subs)
         )
 
     @douyu.command("status")
@@ -949,11 +948,10 @@ class Main(star.Star):
         total_subs = self.data.get_total_subscriptions()
 
         yield event.plain_result(
-            f"📊 斗鱼直播监控状态\n"
-            f"━━━━━━━━━━━━━━\n"
-            f"📺 监控直播间: {total_rooms}\n"
-            f"🟢 运行中: {running}\n"
-            f"👥 总订阅数: {total_subs}"
+            f"【斗鱼监控状态】\n"
+            f"监控直播间: {total_rooms}\n"
+            f"运行中: {running}\n"
+            f"总订阅数: {total_subs}"
         )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -968,13 +966,13 @@ class Main(star.Star):
         """
         if room_id is not None:
             if not self.data.has_room(room_id):
-                yield event.plain_result(f"⚠️ 直播间 {room_id} 不在监控列表中")
+                yield event.plain_result(f"注意: 直播间 {room_id} 不在监控列表中")
                 return
 
             if await self._restart_monitor(room_id):
-                yield event.plain_result(f"✅ 直播间 {room_id} 监控已重启")
+                yield event.plain_result(f"直播间 {room_id} 监控已重启")
             else:
-                yield event.plain_result(f"❌ 直播间 {room_id} 监控重启失败")
+                yield event.plain_result(f"失败: 直播间 {room_id} 监控重启失败")
         else:
             # 重启所有
             room_ids = self.data.get_all_room_ids()
@@ -986,7 +984,7 @@ class Main(star.Star):
                     logger.warning(f"重启直播间 {rid} 监控失败")
 
             yield event.plain_result(
-                f"✅ 已重启 {success}/{len(room_ids)} 个直播间监控"
+                f"已重启 {success}/{len(room_ids)} 个直播间监控"
             )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -1011,6 +1009,6 @@ class Main(star.Star):
 
         status_text = "开启" if new_status else "关闭"
         yield event.plain_result(
-            f"✅ 直播间 {room_info.name}({room_id})\n"
+            f"直播间 {room_info.name}({room_id})\n"
             f"当前群的 @全体成员 已{status_text}{self._save_warning()}"
         )
