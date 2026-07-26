@@ -105,11 +105,16 @@ class DouyuMonitor:
         # 消费协程始终存活,仅靠 is_healthy 看不出连接已长期不通
         self.connected = False
 
-        # ---- 对账重试(仅事件循环访问)----
-        self._resync_pending = False  # 有一次失败的对账待补
-        self._resync_at = 0.0  # monotonic,早于此不重试
+        # ---- 对账调度(仅事件循环访问)----
+        # 对账统一由校准协程串行执行(消费循环只登记请求):
+        # 消费不被 HTTP 阻塞,也不存在两处并发调用 _resync 的问题
+        self._resync_pending = False  # 有一次对账待执行
+        self._resync_at = 0.0  # monotonic,早于此不执行
         self._resync_failures = 0
-        self._resync_inflight = False
+        # 新鲜度基线:fetch 在途期间状态机前进(_obs_seq)或连接更替
+        # (_conn_gen)时,带回的快照可能过期,须丢弃重拉
+        self._obs_seq = 0
+        self._conn_gen = 0
 
     # ==================== 状态查询 ====================
 
@@ -144,6 +149,7 @@ class DouyuMonitor:
         Returns:
             (callback, args): 需要调用的回调及参数,无则 (None, ())
         """
+        self._obs_seq += 1
         self._pending_status = None
         self._pending_msg = None
         self._pending_started_at = None
@@ -190,6 +196,8 @@ class DouyuMonitor:
         if self._stop_flag:
             return
         try:
+            # 每次观测都推进序号:在途对账据此判定快照是否已过期
+            self._obs_seq += 1
             now = time.time()
             callback: Callable | None = None
             args: tuple = ()
@@ -257,6 +265,7 @@ class DouyuMonitor:
             if now - self._last_notify_time < self._notify_cooldown:
                 return
             if self._pending_status == self.last_live_status:
+                self._obs_seq += 1
                 self._pending_status = None
                 self._pending_msg = None
                 self._pending_started_at = None
@@ -275,59 +284,84 @@ class DouyuMonitor:
 
     # ==================== 对账 ====================
 
+    def _schedule_resync(self, delay: float = 0.0) -> None:
+        """登记一次对账请求,由校准协程在到期后执行"""
+        self._resync_pending = True
+        self._resync_at = time.monotonic() + delay
+
     async def _resync(self) -> None:
-        """连接建立后与 HTTP 接口对账当前直播状态
+        """与 HTTP 接口对账当前直播状态(仅由校准协程串行调用)
 
         断连窗口内的状态转换不会在重连后重放,这里主动拉取真实状态
-        喂入状态机补齐。对账失败会按退避安排重试(由校准协程补拉),
-        直到成功——单次失败即放弃会让断连窗口内的转换整场丢失。
+        喂入状态机补齐。对账失败会按退避重试直到成功——单次失败即
+        放弃会让断连窗口内的转换整场丢失。
+
+        新鲜度校验:fetch 在途期间若状态机已前进(收到 rss)或连接已
+        更替,带回的快照可能反映过期状态,直接应用会覆盖较新状态、
+        甚至记出虚假的反向 pending;此时丢弃本次结果并立即重拉。
         """
-        if self._resync_inflight:
-            return
-        self._resync_inflight = True
+        seq_before = self._obs_seq
+        gen_before = self._conn_gen
         try:
-            try:
-                info = await fetch_room(
-                    self.room_id, source=RESYNC_SOURCE, timeout=RESYNC_TIMEOUT
-                )
-            except Exception as e:
-                self._resync_failures += 1
-                delay = min(
-                    RESYNC_RETRY_MAX,
-                    RESYNC_RETRY_BASE * (2 ** (self._resync_failures - 1)),
-                )
-                self._resync_pending = True
-                self._resync_at = time.monotonic() + delay
-                logger.warning(
-                    f"斗鱼直播间 {self.room_id} 开播状态对账失败"
-                    f"(第 {self._resync_failures} 次),{delay:.0f}s 后重试: {e}"
-                )
-                return
-            self._resync_pending = False
-            self._resync_failures = 0
-            if self._stop_flag:
-                return
-            self._apply_observation(
-                info.is_live,
-                {"type": "aiodouyu.resync", "roomid": str(self.room_id)},
-                started_at=float(info.started_at) if info.started_at else None,
+            info = await fetch_room(
+                self.room_id, source=RESYNC_SOURCE, timeout=RESYNC_TIMEOUT
             )
-        finally:
-            self._resync_inflight = False
+        except Exception as e:
+            self._resync_failures += 1
+            # 指数须钳制:计数无界增长时 2**n 的 int->float 转换会在
+            # 约 1025 次连续失败后抛 OverflowError(2**6*5=320 已超过
+            # RESYNC_RETRY_MAX,钳到 6 不改变退避语义)
+            delay = min(
+                RESYNC_RETRY_MAX,
+                RESYNC_RETRY_BASE * (2 ** min(self._resync_failures - 1, 6)),
+            )
+            self._schedule_resync(delay)
+            logger.warning(
+                f"斗鱼直播间 {self.room_id} 开播状态对账失败"
+                f"(第 {self._resync_failures} 次),{delay:.0f}s 后重试: {e}"
+            )
+            return
+        self._resync_pending = False
+        self._resync_failures = 0
+        if self._stop_flag:
+            return
+        if seq_before != self._obs_seq or gen_before != self._conn_gen:
+            logger.debug(
+                f"斗鱼直播间 {self.room_id} 对账快照已过期"
+                f"(fetch 在途期间状态机前进或连接更替),丢弃并重拉"
+            )
+            self._schedule_resync()
+            return
+        self._apply_observation(
+            info.is_live,
+            {"type": "aiodouyu.resync", "roomid": str(self.room_id)},
+            started_at=float(info.started_at) if info.started_at else None,
+        )
 
     # ==================== 生命周期 ====================
 
     async def _reconcile_loop(self) -> None:
-        """周期校准:冷却期待定状态补发 + 失败对账的退避重试"""
+        """周期校准:冷却期待定状态补发 + 对账请求的串行执行
+
+        循环体必须兜底异常:此协程静默死亡的话,pending 补发与对账
+        全部失效而 is_healthy 仍为 True,watchdog 无从感知。
+        """
         while True:
             await asyncio.sleep(RECONCILE_INTERVAL)
-            self._reconcile_pending()
-            if (
-                self._resync_pending
-                and not self._stop_flag
-                and time.monotonic() >= self._resync_at
-            ):
-                await self._resync()
+            try:
+                self._reconcile_pending()
+                if (
+                    self._resync_pending
+                    and not self._stop_flag
+                    and time.monotonic() >= self._resync_at
+                ):
+                    await self._resync()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(
+                    f"斗鱼直播间 {self.room_id} 校准协程出错: {e}", exc_info=True
+                )
 
     async def _run(self) -> None:
         """消费协程:驱动弹幕客户端,分发事件到状态机"""
@@ -342,8 +376,14 @@ class DouyuMonitor:
                 msg_type = msg.get("type")
                 if msg_type == EVENT_CONNECTED:
                     self.connected = True
-                    logger.info(f"斗鱼监控器 {self.room_id} 弹幕连接就绪,对账状态")
-                    await self._resync()
+                    self._conn_gen += 1
+                    # 对账登记给校准协程执行,不在消费循环内联 await:
+                    # 消费不被 HTTP 阻塞(rss 照常处理,过期快照由
+                    # 新鲜度校验丢弃),对账请求也不会因重试在途而丢失
+                    self._schedule_resync()
+                    logger.info(
+                        f"斗鱼监控器 {self.room_id} 弹幕连接就绪,已登记状态对账"
+                    )
                 elif msg_type == EVENT_DISCONNECTED:
                     self.connected = False
                 elif msg_type == "rss":

@@ -162,9 +162,13 @@ def test_run_dispatches_rss_and_stop_closes_client():
 
 
 def test_connected_event_triggers_resync(monkeypatch):
-    """EVENT_CONNECTED 必须触发 HTTP 对账并喂入状态机（断连窗口补偿）"""
+    """EVENT_CONNECTED 必须触发 HTTP 对账并喂入状态机（断连窗口补偿）
+
+    对账由校准协程延迟执行（不在消费循环内联），故需推进真实时间。
+    """
 
     async def run():
+        monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
         events = []
         calls = []
 
@@ -185,10 +189,14 @@ def test_connected_event_triggers_resync(monkeypatch):
 
         client.push({"type": EVENT_CONNECTED, "roomid": "6"})
         await _drain()
+        assert m.connected is True  # 事件同步生效,不等对账
+        assert m._resync_pending  # 对账已登记
+        await asyncio.sleep(0.05)  # 校准协程执行对账
 
         assert calls == [(6, "betard")]  # 对账固定走 betard（open 不识别轮播）
         assert events == [("live", 6, "aiodouyu.resync")]
         assert m.live_start_time == 999.0  # 用对账源的开播时间修正时长基准
+        assert not m._resync_pending
 
         await m.stop()
 
@@ -196,9 +204,10 @@ def test_connected_event_triggers_resync(monkeypatch):
 
 
 def test_resync_failure_is_skipped(monkeypatch):
-    """对账失败只跳过本轮，不得破坏状态机或杀死消费协程"""
+    """对账失败不得破坏状态机或杀死协程,且已登记退避重试"""
 
     async def run():
+        monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
         events = []
 
         async def failing_fetch_room(room_id, *, source, timeout):
@@ -216,10 +225,11 @@ def test_resync_failure_is_skipped(monkeypatch):
         from aiodouyu import EVENT_CONNECTED
 
         client.push({"type": EVENT_CONNECTED, "roomid": "7"})
-        await _drain()
+        await asyncio.sleep(0.05)  # 校准协程执行了一次失败的对账
         assert events == []
         assert m.last_live_status is None  # 状态未被污染
         assert m.is_healthy  # 协程仍在运行
+        assert m._resync_pending and m._resync_failures == 1  # 已登记重试
 
         # 后续 rss 仍正常驱动
         client.push({"type": "rss", "ss": "1", "ivl": "0"})
@@ -305,7 +315,7 @@ def test_resync_failure_retried_until_success(monkeypatch):
         from aiodouyu import EVENT_CONNECTED
 
         client.push({"type": EVENT_CONNECTED, "roomid": "13"})
-        await _drain()
+        await asyncio.sleep(0.05)  # 校准协程执行首次对账(失败)
         assert calls == ["betard"] and events == []
         assert m._resync_pending  # 已登记待重试
 
@@ -314,6 +324,91 @@ def test_resync_failure_retried_until_success(monkeypatch):
         assert calls == ["betard", "betard"]
         assert events == ["live"]
         assert not m._resync_pending
+
+        await m.stop()
+
+    asyncio.run(run())
+
+
+def test_resync_stale_snapshot_discarded(monkeypatch):
+    """fetch 在途期间状态机前进:过期快照必须丢弃重拉,不得记出虚假 pending"""
+
+    async def run():
+        monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
+        events = []
+        gate = asyncio.Event()
+        calls = []
+
+        async def gated_fetch_room(room_id, *, source, timeout):
+            calls.append(1)
+            if len(calls) == 1:
+                await gate.wait()  # 首次对账挂起,模拟慢速 betard
+                # 带回的是"未开播"的过期快照
+                return SimpleNamespace(is_live=False, started_at=None)
+            return SimpleNamespace(is_live=True, started_at=None)
+
+        monkeypatch.setattr(monitor_mod, "fetch_room", gated_fetch_room)
+
+        client = FakeDanmakuClient()
+        m = DouyuMonitor(
+            16,
+            live_callback=lambda r, msg: events.append("live"),
+            offline_callback=lambda r, d: events.append("off"),
+            client_factory=lambda: client,
+        )
+        m.start()
+        from aiodouyu import EVENT_CONNECTED
+
+        client.push({"type": EVENT_CONNECTED, "roomid": "16"})
+        await asyncio.sleep(0.05)  # 首次对账进入 fetch 并挂起
+        assert calls == [1]
+
+        # fetch 在途期间收到 rss:真实开播,状态机前进并播报
+        client.push({"type": "rss", "ss": "1", "ivl": "0"})
+        await _drain()
+        assert events == ["live"]
+
+        gate.set()  # 过期快照(未开播)此刻返回
+        await asyncio.sleep(0.05)  # 校准协程完成首次对账并重拉
+
+        # 过期快照必须被丢弃:不产生反向 pending,也不吞后续通知
+        assert m._pending_status is None
+        assert m.last_live_status is True
+        assert len(calls) == 2  # 已用新鲜数据重拉
+        assert events == ["live"]  # 无虚假通知
+
+        await m.stop()
+
+    asyncio.run(run())
+
+
+def test_resync_overflow_clamped(monkeypatch):
+    """失败计数极大时退避计算不得溢出,校准协程不得死亡"""
+
+    async def run():
+        monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
+
+        async def failing_fetch_room(room_id, *, source, timeout):
+            raise RuntimeError("持续失败")
+
+        monkeypatch.setattr(monitor_mod, "fetch_room", failing_fetch_room)
+
+        client = FakeDanmakuClient()
+        m = DouyuMonitor(17, client_factory=lambda: client)
+        m.start()
+        # 直接注入巨大的失败计数(等价于连续失败约 17 小时后的状态)
+        m._resync_failures = 5000
+        m._schedule_resync()
+        await asyncio.sleep(0.05)  # 旧实现在此抛 OverflowError 杀死协程
+
+        assert m._resync_failures == 5001  # 又失败了一次,但没有崩
+        assert m._resync_pending  # 重试仍在调度
+        assert m.is_healthy
+
+        # 校准协程仍活着:pending 补发路径仍工作
+        client.push({"type": "rss", "ss": "1", "ivl": "0"})
+        await _drain()
+        assert m.last_live_status is True
 
         await m.stop()
 
@@ -391,6 +486,7 @@ def test_resync_compensates_missed_transition(monkeypatch):
     """断连窗口内开播：重连对账必须补发开播通知（高危回归）"""
 
     async def run():
+        monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
         events = []
 
         async def fake_fetch_room(room_id, *, source, timeout):
@@ -419,7 +515,7 @@ def test_resync_compensates_missed_transition(monkeypatch):
 
         # 断连窗口内主播开播了:重连后没有 rss 重放,只有对账能发现
         client.push({"type": EVENT_CONNECTED, "roomid": "8"})
-        await _drain()
+        await asyncio.sleep(0.05)  # 校准协程执行对账
         assert events == ["live"]
         assert m.last_live_status is True
 
