@@ -345,10 +345,13 @@ class DouyuMonitor:
                 f"(第 {self._resync_failures} 次),{delay:.0f}s 后重试: {e}"
             )
             return
-        self._resync_pending = False
+        # fetch 成功:失败计数与"房间不存在"标志立即复位(房间确然存在);
+        # pending 的清除放在新鲜度检查之后——若清除先行而后续代码抛异常,
+        # 该对账请求会被 _reconcile_loop 的兜底吃掉且永不重试
         self._resync_failures = 0
         self._resync_room_gone = False
         if self._stop_flag:
+            self._resync_pending = False
             return
         if seq_before != self._obs_seq or gen_before != self._conn_gen:
             logger.debug(
@@ -357,6 +360,7 @@ class DouyuMonitor:
             )
             self._schedule_resync()
             return
+        self._resync_pending = False
         self._apply_observation(
             info.is_live,
             {"type": "aiodouyu.resync", "roomid": str(self.room_id)},
@@ -374,13 +378,19 @@ class DouyuMonitor:
         while True:
             await asyncio.sleep(RECONCILE_INTERVAL)
             try:
-                self._reconcile_pending()
+                # 顺序敏感:先执行到期对账,再校准冷却期 pending。
+                # 反序时(重连恰落在 pending 过期的同一 tick,或重启交接
+                # 继承了已过期 pending),过期的抖动 pending 会先被补发成
+                # 虚假通知,随后对账快照又因刚通知处于冷却期而记成反向
+                # pending,再补发一次——一场未中断的直播收到下播+开播对。
+                # 先对账则快照经"回稳"分支清除抖动 pending,零虚假通知
                 if (
                     self._resync_pending
                     and not self._stop_flag
                     and time.monotonic() >= self._resync_at
                 ):
                     await self._resync()
+                self._reconcile_pending()
             except asyncio.CancelledError:
                 raise
             except Exception as e:

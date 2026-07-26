@@ -415,6 +415,56 @@ def test_resync_overflow_clamped(monkeypatch):
     asyncio.run(run())
 
 
+def test_resync_runs_before_expired_pending(monkeypatch):
+    """重启交接继承已过期的抖动 pending 时,对账必须先于 pending 补发执行
+
+    回归(确定性触发):反序会先补发虚假下播,再把对账到的真实在播状态
+    记成反向 pending,30 秒后重复开播——一场未中断的直播收到通知对。
+    """
+
+    async def run():
+        monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
+        events = []
+
+        async def fake_fetch_room(room_id, *, source, timeout):
+            return SimpleNamespace(is_live=True, started_at=None)  # 真实仍在播
+
+        monkeypatch.setattr(monitor_mod, "fetch_room", fake_fetch_room)
+
+        client = FakeDanmakuClient()
+        m = DouyuMonitor(
+            19,
+            live_callback=lambda r, msg: events.append("live"),
+            offline_callback=lambda r, d: events.append("off"),
+            # 重启交接:在播已播报,携带一条冷却期已过期的下播抖动 pending
+            inherit_state={
+                "last_live_status": True,
+                "live_start_time": 1000.0,
+                "has_announced_live": True,
+                "last_notify_time": 0.0,  # 冷却早已过期
+                "pending_status": False,  # 断连前的抖动下播
+                "pending_msg": {"ss": "0", "ivl": "0"},
+                "pending_started_at": None,
+            },
+            client_factory=lambda: client,
+        )
+        m.start()
+        from aiodouyu import EVENT_CONNECTED
+
+        client.push({"type": EVENT_CONNECTED, "roomid": "19"})
+        await asyncio.sleep(0.08)  # 数个校准 tick
+
+        # 对账先行:快照 live == 状态机 live,走回稳分支清除抖动 pending,
+        # 零虚假通知;反序则 events == ["off", ...] 且随后重复开播
+        assert events == []
+        assert m._pending_status is None
+        assert m.last_live_status is True
+
+        await m.stop()
+
+    asyncio.run(run())
+
+
 def test_room_not_found_uses_long_recheck_interval(monkeypatch):
     """封禁/删除房间的对账结论按长间隔复查,不做秒级退避刷接口"""
 
