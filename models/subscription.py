@@ -12,13 +12,11 @@ class SubscriptionConfig:
 
     Attributes:
         at_all: 是否开启 @全体成员（开播通知）
-        gift_notify: 是否开启礼物播报
-        high_value_only: 是否只播报高价值礼物（飞机及以上）
+        subscribed_by: 订阅操作者 ID（审计用）
     """
 
     at_all: bool = False
-    gift_notify: bool = False
-    high_value_only: bool = True  # 默认只播报高价值礼物
+    subscribed_by: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
@@ -26,9 +24,12 @@ class SubscriptionConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SubscriptionConfig":
-        """从字典创建实例"""
+        """从字典创建实例
+
+        旧版本数据中的礼物播报字段（gift_notify / high_value_only）
+        已随礼物播报功能移除，此处直接忽略。
+        """
         return cls(
-            at_all=data.get("at_all", False),
-            gift_notify=data.get("gift_notify", False),
-            high_value_only=data.get("high_value_only", True),
+            at_all=bool(data.get("at_all", False)),
+            subscribed_by=str(data.get("subscribed_by", "")),
         )
