@@ -5,9 +5,8 @@ from collections.abc import Callable
 from threading import Event, Lock, Thread
 from typing import Any
 
-from pydouyu.client import Client
-
 from astrbot.api import logger
+from pydouyu.client import Client
 
 
 class DouyuMonitor:

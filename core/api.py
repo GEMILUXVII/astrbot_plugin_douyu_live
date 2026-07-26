@@ -3,7 +3,6 @@
 from typing import TypedDict
 
 import httpx
-
 from astrbot.api import logger
 
 

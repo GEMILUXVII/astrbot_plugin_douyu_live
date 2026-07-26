@@ -45,6 +45,18 @@
 - 来自斗鱼接口的主播/房间名称等外部文本在进入通知与命令回复前会被清洗（移除换行/控制字符、归一化框线字符、截断），防止伪造通知内容
 - 房间号入参校验（必须为正整数）；斗鱼 API 请求增加 User-Agent
 
+### 工程
+
+- 新增 `tests/` pytest 套件（32 个用例，含 AstrBot/pydouyu 桩），覆盖状态机、
+  持久化容错、数据迁移、通知队列重试与去重等全部核心修复的回归防线
+- 新增 CI 工作流（push/PR 触发 ruff + pytest，py3.10/3.12 矩阵，依赖声明一致性校验）
+- ruff 规则固化进插件 pyproject.toml，不再隐式依赖宿主 AstrBot 的配置
+- release 工作流新增 tag 与 metadata.yaml / pyproject.toml 版本一致性断言
+- metadata.yaml 补充 `display_name`、`short_desc`、`astrbot_version`（>=4.25,<5，
+  版本闸门拦截不兼容宿主）
+- LOGO.png（7MB）压缩为 logo.png（39KB）：修复 Linux 下因文件名大小写不符
+  导致 WebUI 不显示图标的问题，并大幅缩小安装包体积
+
 ### 变更
 
 - 通知发送统一经由队列串行调度：保证发送顺序、限制并发（单条通知扇出并发 5）
