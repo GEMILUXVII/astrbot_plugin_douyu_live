@@ -59,6 +59,9 @@ class DataManager:
         # 快照序列号：并发写盘时用于丢弃过期快照
         self._save_seq = 0
         self._written_seq = 0
+        # 写失败的最高序列号：防止随后落盘的更旧快照把 last_save_ok
+        # 洗白——旧快照写成功不代表失败快照里的变更已在磁盘上
+        self._failed_seq = 0
         # 上次保存是否成功（命令层据此提示用户）
         self.last_save_ok = True
         # 加载失败且无法隔离损坏文件时置位，拒绝一切写入以保护原数据
@@ -308,10 +311,21 @@ class DataManager:
                     os.replace(self.data_file, self.backup_file)
                 os.replace(tmp, self.data_file)
                 self._written_seq = seq
-                self.last_save_ok = True
+                # 只有当本快照不早于最近一次失败的快照时才能洗白
+                # last_save_ok:更旧快照的成功并不包含失败快照的变更,
+                # 洗白会让用户失去"保存失败"的警告(静默丢数据)。
+                # 下一次任意变更的全量保存会自然治愈磁盘状态
+                if seq >= self._failed_seq:
+                    self.last_save_ok = True
+                else:
+                    logger.warning(
+                        "较旧快照落盘成功,但更新的快照曾写入失败,"
+                        "保持保存失败状态直至下次成功保存"
+                    )
                 return True
             except Exception as e:
                 logger.error(f"保存斗鱼直播数据失败: {e}", exc_info=True)
+                self._failed_seq = max(self._failed_seq, seq)
                 self.last_save_ok = False
                 return False
 

@@ -41,6 +41,46 @@ def test_corrupt_without_backup_quarantines_not_wipes(data_dir):
     assert dm.save() is True  # 隔离成功后允许继续写入
 
 
+def test_stale_snapshot_success_does_not_whitewash_failed_newer_save(
+    data_dir, monkeypatch
+):
+    """新快照写失败后,更旧快照落盘成功不得把 last_save_ok 洗白(回归)
+
+    时序:线程 A 序列化旧快照后让出;线程 B 的新变更序列化并写盘失败
+    (Windows 杀毒/索引器瞬时锁);A 的旧快照随后成功落盘。磁盘缺失 B
+    的变更,last_save_ok 必须保持 False 供命令层告警。
+    """
+    import os as os_mod
+
+    dm = DataManager()
+    dm.add_room(100, RoomInfo(name="A"))
+    assert dm.last_save_ok
+
+    # 线程 A:序列化旧快照(尚未写盘)
+    with dm._lock:
+        old_seq, old_payload = dm._serialize_locked()
+
+    # 线程 B:新变更 + 写盘失败
+    real_replace = os_mod.replace
+
+    def failing_replace(src, dst):
+        raise OSError("模拟杀毒软件锁定文件")
+
+    monkeypatch.setattr(os_mod, "replace", failing_replace)
+    assert dm.subscribe(100, "umoX")[0] is True  # 内存成功,落盘失败
+    assert dm.last_save_ok is False
+    monkeypatch.setattr(os_mod, "replace", real_replace)
+
+    # 线程 A 的旧快照此刻才进入 IO 锁并成功写入
+    assert dm._write_payload(old_seq, old_payload) is True
+    # 不得洗白:磁盘上没有 umoX 的订阅
+    assert dm.last_save_ok is False
+
+    # 下一次任意变更的全量保存自然治愈
+    dm.subscribe(100, "umoY")
+    assert dm.last_save_ok is True
+
+
 def test_unicode_digit_keys_skipped_not_fatal(data_dir):
     """"²"/"①" 等 isdigit()=True 但 int() 抛异常的键必须跳过而非崩溃加载（回归）"""
     payload = {
