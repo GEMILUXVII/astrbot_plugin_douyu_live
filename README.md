@@ -11,7 +11,7 @@
 <br>
 
 <div align="center">
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-v2.2.5-9644F4?style=for-the-badge" alt="Version"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-v2.2.6-9644F4?style=for-the-badge" alt="Version"></a>
   <a href="https://github.com/GEMILUXVII/astrbot_plugin_douyu_live/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-E53935?style=for-the-badge" alt="License"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"></a>
   <a href="https://github.com/AstrBotDevs/AstrBot"><img src="https://img.shields.io/badge/AstrBot-Compatible-00BFA5?style=for-the-badge&logo=robot&logoColor=white" alt="AstrBot Compatible"></a>
@@ -42,8 +42,8 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 - **订阅推送**：用户可自主订阅/取消订阅，精准推送到群/私聊
 - **@全体成员**：支持开播时自动 @全体成员（可选）
 - **下播通知**：自动推送下播提醒并附带当次直播时长
-- **抗抖动机制**：原始状态变化须经 HTTP 对账确认，并配合状态冷却、
-  接口延迟补偿和 90 秒稳定下播复核，避免重复、漏报或假下播
+- **抗抖动机制**：原始状态变化须经 HTTP 对账确认，并配合状态冷却和
+  可配置的二次下播复核（默认 10 秒），避免重复、漏报或假下播
 - **断连补偿**：每次弹幕重连后自动用 HTTP 接口对账开播状态，补齐断连
   窗口内丢失的开播/下播（对账失败按 5/10/20/40/60s 退避重试直到成功）
 - **可靠推送**：通知发送失败按 5/15/45/120s 退避重试（最长保留 6 小时），
@@ -75,7 +75,7 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 2. **重启/重载 AstrBot**
 
    在 WebUI 重载插件，或直接重启 AstrBot。AstrBot 会按
-   `requirements.txt` 从 PyPI 安装 `aiodouyu>=0.4.5,<0.5`，不会从相邻
+   `requirements.txt` 从 PyPI 安装 `aiodouyu>=0.4.6,<0.5`，不会从相邻
    源码目录导入。
 
 ## 命令列表
@@ -104,8 +104,8 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 | `/douyu mysub`          | 查看我的订阅   | `/douyu mysub`          |
 | `/douyu status`         | 查看监控状态   | `/douyu status`         |
 
-> 2.2.0 起支持 WebUI 插件配置(通知富化/封面图/重启补播报/通知冷却/
-> HTTP 兜底对账间隔/订阅权限档位/场次保留天数),见 AstrBot 管理面板的
+> WebUI 支持配置通知富化、封面图、重启补播报、通知冷却、下播二次确认、
+> HTTP 兜底对账间隔、订阅权限档位和场次保留天数，见 AstrBot 管理面板的
 > 插件配置页。
 > 开播通知默认附带直播间标题、分类与封面图;场次历史落盘于插件数据
 > 目录 `sessions/`,供后续统计功能使用。

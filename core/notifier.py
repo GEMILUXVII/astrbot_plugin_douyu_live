@@ -158,6 +158,7 @@ class Notifier:
 
         async def _send(umo: str, at_all: bool) -> None:
             async with semaphore:
+                started_at = time.monotonic()
                 try:
                     result = MessageEventResult()
                     if at_all and use_at_all:
@@ -171,7 +172,12 @@ class Notifier:
                         timeout=SEND_TIMEOUT,
                     )
                     if ok:
-                        logger.info(f"斗鱼通知发送成功: {umo} (at_all={at_all})")
+                        logger.info(
+                            "斗鱼通知发送成功: %s (at_all=%s, 适配器耗时 %.3fs)",
+                            umo,
+                            at_all,
+                            time.monotonic() - started_at,
+                        )
                     else:
                         logger.warning(
                             f"斗鱼通知暂未发送: 未找到匹配的平台适配器 ({umo})"

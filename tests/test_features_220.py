@@ -82,6 +82,7 @@ def test_cfg_fallback_and_override(make_main):
         config={
             "notify_enrich": False,
             "notify_cooldown": 5,
+            "offline_confirmation": 7,
             "status_reconcile_interval": 0,
         },
     )
@@ -89,9 +90,11 @@ def test_cfg_fallback_and_override(make_main):
     assert m2._cfg("notify_cooldown") == 5
     assert m2._cfg("subscribe_permission") == "everyone"  # 未覆盖走默认
     assert m2._new_monitor(1)._periodic_resync_interval == 0
+    assert m2._new_monitor(1)._offline_confirmation == 7
 
     m3 = Main(Ctx())
     assert m3._new_monitor(1)._periodic_resync_interval == 300
+    assert m3._new_monitor(1)._offline_confirmation == 10
 
 
 # ==================== offline 开关 ====================
@@ -234,6 +237,36 @@ def test_enrich_failure_degrades(make_main, monkeypatch):
     assert "主播B" in message and cover is None  # 降级为基础文本
 
 
+def test_live_notification_reuses_monitor_snapshot(make_main, monkeypatch):
+    m = make_main()
+    m.data.add_room(922, RoomInfo(name="主播C"))
+    m.data.subscribe(922, "umoE")
+
+    async def unexpected_get(room_id, **kwargs):
+        raise AssertionError("monitor snapshot should avoid a second HTTP request")
+
+    monkeypatch.setattr(m._room_cache, "get", unexpected_get)
+    m._on_live_start(
+        922,
+        {
+            "type": "aiodouyu.resync",
+            "room_info": {
+                "title": "快照标题",
+                "category": "快照分类",
+                "cover_url": "https://x/snapshot.jpg",
+            },
+        },
+    )
+    item = m._notification_queue.get_nowait()
+
+    asyncio.run(m._build_notification_message(item))
+
+    assert item.snapshot_available is True
+    assert "快照标题" in item.message
+    assert "快照分类" in item.message
+    assert item.cover_url == "https://x/snapshot.jpg"
+
+
 # ==================== /douyu live ====================
 
 
@@ -366,8 +399,8 @@ def test_monitor_announce_initial_live_off(fake_time):
     assert events == []  # 不补发
     assert m.last_live_status is True  # 但状态被接管
     fake_time.now = 1100.0
-    m._rss_handler({"ss": "0", "ivl": "0"})  # 本场未播报过 -> 下播也静默
-    assert events == []
+    m._rss_handler({"ss": "0", "ivl": "0"})  # 初始开播静默,后续下播仍需通知
+    assert events == ["off"]
     fake_time.now = 1200.0
     m._rss_handler({"ss": "1", "ivl": "0"})  # 下一场正常播报
-    assert events == ["live"]
+    assert events == ["off", "live"]

@@ -23,6 +23,12 @@
     "hint": "抖动抑制窗口;期间的真实转换会在冷却结束后补发",
     "default": 30
   },
+  "offline_confirmation": {
+    "description": "下播状态二次确认等待时间(秒)",
+    "type": "int",
+    "hint": "首次 HTTP 确认下播后等待该时间再次确认;默认 10 秒,0 表示不二次确认",
+    "default": 10
+  },
   "status_reconcile_interval": {
     "description": "直播状态 HTTP 兜底对账间隔(秒)",
     "type": "int",

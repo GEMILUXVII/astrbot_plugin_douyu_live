@@ -27,7 +27,7 @@ from .utils.text import sanitize_display_text
 
 # 通知队列容量上限（防止无界增长）
 NOTIFY_QUEUE_MAX = 1000
-# 队列处理轮询间隔（秒）
+# 只有等待未来重试项时才使用的最大让出间隔（秒）
 NOTIFY_POLL_INTERVAL = 0.5
 # 重试退避：第 n 次重试前等待 NOTIFY_RETRY_BACKOFF_BASE * 3^(n-1) 秒，
 # 上限 NOTIFY_RETRY_BACKOFF_MAX——5/15/45/120s，覆盖分钟级的平台抖动
@@ -49,6 +49,7 @@ DEFAULT_CONFIG = {
     "notify_cover": True,
     "catchup_announce": True,
     "notify_cooldown": 30,
+    "offline_confirmation": 10,
     "status_reconcile_interval": 300,
     "subscribe_permission": "everyone",
     "session_log_retention_days": 90,
@@ -76,6 +77,9 @@ class PendingNotification:
     room_name: str = ""
     duration: float = 0.0  # offline: 直播时长(秒)
     event_ts: float = 0.0  # 事件发生时刻(epoch)
+    title: str | None = None
+    category: str | None = None
+    snapshot_available: bool = False
     cover_url: str | None = None  # 构建时填充
 
     def to_record(self) -> dict:
@@ -89,6 +93,9 @@ class PendingNotification:
             "room_name": self.room_name,
             "duration": self.duration,
             "event_ts": self.event_ts,
+            "title": self.title,
+            "category": self.category,
+            "snapshot_available": self.snapshot_available,
             "cover_url": self.cover_url,
         }
 
@@ -112,6 +119,15 @@ class PendingNotification:
                 room_name=str(record.get("room_name", "")),
                 duration=max(float(record.get("duration", 0.0)), 0.0),
                 event_ts=max(float(record.get("event_ts", 0.0)), 0.0),
+                title=(
+                    str(record["title"]) if record.get("title") is not None else None
+                ),
+                category=(
+                    str(record["category"])
+                    if record.get("category") is not None
+                    else None
+                ),
+                snapshot_available=bool(record.get("snapshot_available", False)),
                 cover_url=(
                     str(record["cover_url"])
                     if record.get("cover_url") is not None
@@ -295,6 +311,7 @@ class Main(star.Star):
             offline_callback=self._on_live_end,
             inherit_state=inherit_state,
             notify_cooldown=float(self._cfg("notify_cooldown")),
+            offline_confirmation=float(self._cfg("offline_confirmation")),
             announce_initial_live=bool(self._cfg("catchup_announce")),
             periodic_resync_interval=float(self._cfg("status_reconcile_interval")),
         )
@@ -406,14 +423,12 @@ class Main(star.Star):
         while True:
             item: PendingNotification | None = None
             try:
-                await asyncio.sleep(NOTIFY_POLL_INTERVAL)
-                try:
-                    item = self._notification_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    continue
+                item = await self._notification_queue.get()
                 if item.next_attempt_at > time.monotonic():
+                    retry_wait = item.next_attempt_at - time.monotonic()
                     self._notification_queue.put_nowait(item)
                     item = None
+                    await asyncio.sleep(min(retry_wait, NOTIFY_POLL_INTERVAL))
                     continue
 
                 if not item.message:
@@ -421,9 +436,15 @@ class Main(star.Star):
                 use_at_all = item.retry_count < 2
                 cover = item.cover_url if item.retry_count < 1 else None
                 kind_name = "开播" if item.kind == "live" else "下播"
+                latency_text = (
+                    f"，事件到投递 {max(time.time() - item.event_ts, 0.0):.3f}s"
+                    if item.event_ts > 0
+                    else ""
+                )
                 logger.info(
                     f"正在发送斗鱼{kind_name}通知: "
                     f"房间 {item.room_id}，目标 {len(item.subscriber_settings)} 个"
+                    f"{latency_text}"
                 )
                 failed = await self.notifier.send_to_subscribers(
                     item.subscriber_settings,
@@ -502,15 +523,22 @@ class Main(star.Star):
         if item.kind == "live":
             title = category = None
             if self._cfg("notify_enrich"):
-                try:
-                    info = await self._room_cache.get(item.room_id, timeout=5.0)
-                    title, category = info.title, info.category
-                    if self._cfg("notify_cover"):
-                        item.cover_url = info.cover_url
-                except Exception as e:
-                    logger.warning(
-                        f"直播间 {item.room_id} 通知富化失败,降级为基础文本: {e}"
-                    )
+                if item.snapshot_available:
+                    title, category = item.title, item.category
+                    if not self._cfg("notify_cover"):
+                        item.cover_url = None
+                else:
+                    try:
+                        info = await self._room_cache.get(item.room_id, timeout=5.0)
+                        title, category = info.title, info.category
+                        if self._cfg("notify_cover"):
+                            item.cover_url = info.cover_url
+                    except Exception as e:
+                        logger.warning(
+                            f"直播间 {item.room_id} 通知富化失败,降级为基础文本: {e}"
+                        )
+            else:
+                item.cover_url = None
             item.message = self.notifier.build_notification(
                 item.room_id,
                 item.room_name,
@@ -601,6 +629,17 @@ class Main(star.Star):
         subscriber_settings = {
             umo: config.at_all for umo, config in sub_configs.items()
         }
+        snapshot = msg.get("room_info")
+        snapshot_available = isinstance(snapshot, dict)
+        if snapshot_available:
+            title_value = snapshot.get("title")
+            category_value = snapshot.get("category")
+            cover_value = snapshot.get("cover_url")
+            title = str(title_value) if title_value else None
+            category = str(category_value) if category_value else None
+            cover_url = str(cover_value) if cover_value else None
+        else:
+            title = category = cover_url = None
         scheduled = self._schedule_notification(
             subscriber_settings,
             dedup_key=("live", room_id),
@@ -608,6 +647,10 @@ class Main(star.Star):
             room_id=room_id,
             room_name=room_name,
             event_ts=time.time(),
+            title=title,
+            category=category,
+            snapshot_available=snapshot_available,
+            cover_url=cover_url,
         )
         if scheduled:
             logger.info(

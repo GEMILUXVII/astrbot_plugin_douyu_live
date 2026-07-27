@@ -1,6 +1,6 @@
 [project]
 name = "astrbot-plugin-douyu-live"
-version = "2.2.5"
+version = "2.2.6"
 description = "An AstrBot plugin designed to monitor Douyu live streams and send real-time notifications."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -8,7 +8,7 @@ requires-python = ">=3.10"
 # CI 会校验两处保持一致
 # 上界锁次版本:插件耦合库的 0.x 细粒度语义(事件常量/异常继承/签名),
 # 库发新次版本时插件跟发小版本抬上界
-dependencies = ["aiodouyu>=0.4.5,<0.5"]
+dependencies = ["aiodouyu>=0.4.6,<0.5"]
 
 # 与 AstrBot 主仓库的 ruff 规则保持一致（插件单独 clone 时不再依赖宿主配置）
 [tool.ruff]

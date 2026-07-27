@@ -98,6 +98,33 @@ def test_schedule_empty_settings_noop(make_main):
     assert m._notification_queue.qsize() == 0
 
 
+def test_notification_queue_wakes_without_poll_delay(make_main):
+    """A newly queued notification should wake the worker immediately."""
+    m = make_main()
+    sending = asyncio.Event()
+
+    class FakeNotifier:
+        async def send_to_subscribers(
+            self, settings, message, use_at_all=True, cover_url=None
+        ):
+            sending.set()
+            return set()
+
+    m.notifier = FakeNotifier()
+    m._schedule_notification({"umo": False}, "msg")
+
+    async def run():
+        task = asyncio.create_task(m._process_notification_queue())
+        await asyncio.wait_for(sending.wait(), timeout=0.3)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(run())
+
+
 def test_cancelled_send_is_returned_to_queue(make_main, monkeypatch):
     import astrbot_plugin_douyu_live.main as main_mod
 
@@ -140,6 +167,9 @@ def test_pending_notification_round_trip():
         room_id=1,
         room_name="room",
         event_ts=time.time(),
+        title="title",
+        category="category",
+        snapshot_available=True,
         cover_url="https://example.com/cover.jpg",
     )
     restored = PendingNotification.from_record(item.to_record())
@@ -149,6 +179,9 @@ def test_pending_notification_round_trip():
     assert restored.retry_count == 2
     assert restored.kind == "live"
     assert restored.room_id == 1
+    assert restored.title == "title"
+    assert restored.category == "category"
+    assert restored.snapshot_available is True
     assert restored.next_attempt_at > time.monotonic()
 
 
