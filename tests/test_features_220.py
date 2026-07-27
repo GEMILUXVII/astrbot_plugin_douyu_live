@@ -93,8 +93,9 @@ def test_cfg_fallback_and_override(make_main):
     assert m2._new_monitor(1)._offline_confirmation == 7
 
     m3 = Main(Ctx())
-    assert m3._new_monitor(1)._periodic_resync_interval == 300
+    assert m3._new_monitor(1)._periodic_resync_interval == 30
     assert m3._new_monitor(1)._offline_confirmation == 10
+    assert m3._new_monitor(1)._announce_initial_live is True
 
 
 # ==================== offline 开关 ====================
@@ -265,6 +266,45 @@ def test_live_notification_reuses_monitor_snapshot(make_main, monkeypatch):
     assert "快照标题" in item.message
     assert "快照分类" in item.message
     assert item.cover_url == "https://x/snapshot.jpg"
+
+
+def test_realtime_rss_notification_never_waits_for_enrichment(make_main, monkeypatch):
+    m = make_main()
+    m.data.add_room(923, RoomInfo(name="主播D"))
+    m.data.subscribe(923, "umoE")
+
+    async def unexpected_get(room_id, **kwargs):
+        raise AssertionError("real-time rss must not wait for HTTP enrichment")
+
+    monkeypatch.setattr(m._room_cache, "get", unexpected_get)
+    m._on_live_start(923, {"type": "rss", "ss": "1", "ivl": "0"})
+    item = m._notification_queue.get_nowait()
+
+    asyncio.run(m._build_notification_message(item))
+
+    assert item.snapshot_available is True
+    assert "主播D" in item.message
+    assert item.cover_url is None
+
+
+def test_realtime_rss_reaches_plugin_queue_end_to_end(make_main, monkeypatch):
+    m = make_main()
+    m.data.add_room(924, RoomInfo(name="主播E"))
+    m.data.subscribe(924, "umoE")
+
+    async def unexpected_get(room_id, **kwargs):
+        raise AssertionError("end-to-end rss path must not call HTTP")
+
+    monkeypatch.setattr(m._room_cache, "get", unexpected_get)
+    monitor = m._new_monitor(924)
+
+    monitor._rss_handler({"type": "rss", "rid": "924", "ss": "1", "ivl": "0"})
+
+    assert m._notification_queue.qsize() == 1
+    item = m._notification_queue.get_nowait()
+    asyncio.run(m._build_notification_message(item))
+    assert item.kind == "live"
+    assert "主播E" in item.message
 
 
 # ==================== /douyu live ====================

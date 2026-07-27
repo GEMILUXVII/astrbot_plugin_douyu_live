@@ -50,7 +50,7 @@ DEFAULT_CONFIG = {
     "catchup_announce": True,
     "notify_cooldown": 30,
     "offline_confirmation": 10,
-    "status_reconcile_interval": 300,
+    "status_reconcile_interval": 30,
     "subscribe_permission": "everyone",
     "session_log_retention_days": 90,
 }
@@ -630,8 +630,12 @@ class Main(star.Star):
             umo: config.at_all for umo, config in sub_configs.items()
         }
         snapshot = msg.get("room_info")
-        snapshot_available = isinstance(snapshot, dict)
-        if snapshot_available:
+        has_snapshot = isinstance(snapshot, dict)
+        # Real-time rss is the latency-sensitive path. If no cached HTTP
+        # snapshot is available, send the basic notification immediately
+        # instead of blocking it on another network request.
+        skip_http_enrichment = msg.get("type") == "rss"
+        if has_snapshot:
             title_value = snapshot.get("title")
             category_value = snapshot.get("category")
             cover_value = snapshot.get("cover_url")
@@ -649,7 +653,7 @@ class Main(star.Star):
             event_ts=time.time(),
             title=title,
             category=category,
-            snapshot_available=snapshot_available,
+            snapshot_available=has_snapshot or skip_http_enrichment,
             cover_url=cover_url,
         )
         if scheduled:

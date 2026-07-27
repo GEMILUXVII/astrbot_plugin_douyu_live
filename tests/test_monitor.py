@@ -244,8 +244,8 @@ def test_connected_event_triggers_resync(monkeypatch):
     asyncio.run(run())
 
 
-def test_resync_failure_keeps_rss_unconfirmed(monkeypatch):
-    """对账失败不得信任 rss、污染状态机或杀死协程"""
+def test_resync_failure_does_not_block_realtime_live(monkeypatch):
+    """A failed HTTP audit must not block an explicit real-time live event."""
 
     async def run():
         monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
@@ -272,13 +272,13 @@ def test_resync_failure_keeps_rss_unconfirmed(monkeypatch):
         assert m.is_healthy  # 协程仍在运行
         assert m._resync_pending and m._resync_failures == 1  # 已登记重试
 
-        # 后续 rss 只登记候选状态，HTTP 不可用时不能直接触发通知。
+        # Explicit live rss is the authoritative low-latency path.
         client.push({"type": "rss", "ss": "1", "ivl": "0"})
         await _drain()
-        assert events == []
-        assert m.last_live_status is None
-        assert m._pending_status is True
-        assert m._pending_needs_resync is True
+        assert events == ["live"]
+        assert m.last_live_status is True
+        assert m._pending_status is None
+        assert m._pending_needs_resync is False
 
         await m.stop()
 
@@ -487,11 +487,11 @@ def test_resync_stale_snapshot_discarded(monkeypatch):
         await asyncio.sleep(0.05)  # 首次对账进入 fetch 并挂起
         assert calls == [1]
 
-        # fetch 在途期间收到 rss：它只能登记候选状态，不能越过 HTTP 确认。
+        # A live rss received during fetch must be emitted immediately.
         client.push({"type": "rss", "ss": "1", "ivl": "0"})
         await _drain()
-        assert events == []
-        assert m._pending_status is True
+        assert events == ["live"]
+        assert m._pending_status is None
 
         gate.set()  # 过期快照(未开播)此刻返回
         await asyncio.sleep(0.05)  # 校准协程完成首次对账并重拉
@@ -500,7 +500,7 @@ def test_resync_stale_snapshot_discarded(monkeypatch):
         assert m._pending_status is None
         assert m.last_live_status is True
         assert len(calls) == 2  # 已用新鲜数据重拉
-        assert events == ["live"]  # 无虚假通知
+        assert events == ["live"]  # no duplicate or false offline event
 
         await m.stop()
 
