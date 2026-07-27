@@ -115,12 +115,16 @@ class Notifier:
 
         # 计算时长
         if duration_seconds > 0:
-            hours = int(duration_seconds // 3600)
-            minutes = int((duration_seconds % 3600) // 60)
-            if hours > 0:
-                duration_str = f"{hours}小时{minutes}分钟"
+            if duration_seconds < 60:
+                seconds = max(1, round(duration_seconds))
+                duration_str = f"{seconds}秒"
             else:
-                duration_str = f"{minutes}分钟"
+                hours = int(duration_seconds // 3600)
+                minutes = int((duration_seconds % 3600) // 60)
+                if hours > 0:
+                    duration_str = f"{hours}小时{minutes}分钟"
+                else:
+                    duration_str = f"{minutes}分钟"
         else:
             duration_str = "未知"
 
