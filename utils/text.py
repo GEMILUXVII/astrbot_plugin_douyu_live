@@ -26,7 +26,9 @@ _CONTROL_CHARS = re.compile(
 )
 
 
-def sanitize_display_text(text: object, max_len: int = 32, default: str = "未知") -> str:
+def sanitize_display_text(
+    text: object, max_len: int = 32, default: str = "未知"
+) -> str:
     """清洗用于展示的外部文本
 
     - 移除换行/控制字符（含 C1、bidi 控制符与零宽字符），防止伪造消息框架

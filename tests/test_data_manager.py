@@ -82,7 +82,7 @@ def test_stale_snapshot_success_does_not_whitewash_failed_newer_save(
 
 
 def test_unicode_digit_keys_skipped_not_fatal(data_dir):
-    """"²"/"①" 等 isdigit()=True 但 int() 抛异常的键必须跳过而非崩溃加载（回归）"""
+    """ "²"/"①" 等 isdigit()=True 但 int() 抛异常的键必须跳过而非崩溃加载（回归）"""
     payload = {
         "room_info": {
             "²": {"name": "evil"},
@@ -128,9 +128,7 @@ def test_legacy_list_migration_carries_at_all_only(data_dir):
             }
         },
     }
-    (data_dir / "douyu_live_data.json").write_text(
-        json.dumps(legacy), encoding="utf-8"
-    )
+    (data_dir / "douyu_live_data.json").write_text(json.dumps(legacy), encoding="utf-8")
     dm = DataManager()
     cfg = dm.get_subscription_config(123, "umoA")
     assert cfg is not None and cfg.at_all is True

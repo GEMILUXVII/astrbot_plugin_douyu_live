@@ -74,7 +74,7 @@ def test_no_gift_builder():
 
 
 def test_send_failure_classification():
-    """异常 -> 可重试；send_message 返回 False（无平台）-> 不重试"""
+    """异常与 send_message=False 都必须交给上层重试。"""
 
     class Ctx:
         async def send_message(self, umo, result):
@@ -86,7 +86,7 @@ def test_send_failure_classification():
     failed = asyncio.run(
         n.send_to_subscribers({"ok": True, "boom": False, "noplatform": False}, "hi")
     )
-    assert failed == {"boom"}
+    assert failed == {"boom", "noplatform"}
 
 
 def test_send_timeout_counts_as_failed(monkeypatch):

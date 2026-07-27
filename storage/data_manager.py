@@ -102,9 +102,7 @@ class DataManager:
             if block_on_failure:
                 # 连隔离都失败（如文件被占用）：禁止写入，保护原文件
                 self._write_blocked = True
-                logger.error(
-                    f"无法隔离损坏的数据文件，已禁用自动保存以保护原文件: {e}"
-                )
+                logger.error(f"无法隔离损坏的数据文件，已禁用自动保存以保护原文件: {e}")
             else:
                 logger.error(f"无法隔离损坏的备份文件 {path.name}: {e}")
 
@@ -199,9 +197,7 @@ class DataManager:
                         if isinstance(umo, str):
                             bucket[umo] = SubConfigClass(**flags)
                     migrated = True
-                    logger.info(
-                        f"已迁移房间 {room_id} 的 {len(bucket)} 个订阅到新格式"
-                    )
+                    logger.info(f"已迁移房间 {room_id} 的 {len(bucket)} 个订阅到新格式")
                 elif isinstance(sub_data, dict):
                     # 新格式: {umo -> config dict}
                     for umo, config in sub_data.items():
@@ -279,18 +275,14 @@ class DataManager:
         data = {
             "subscriptions": {
                 str(room_id): {
-                    umo: config.to_dict()
-                    for umo, config in sub_dict.items()
+                    umo: config.to_dict() for umo, config in sub_dict.items()
                 }
                 for room_id, sub_dict in self.subscriptions.items()
             },
-            "room_info": {
-                str(k): v.to_dict() for k, v in self.room_info.items()
-            },
+            "room_info": {str(k): v.to_dict() for k, v in self.room_info.items()},
             "unsub_history": {
                 str(room_id): {
-                    umo: config.to_dict()
-                    for umo, config in sub_dict.items()
+                    umo: config.to_dict() for umo, config in sub_dict.items()
                 }
                 for room_id, sub_dict in self.unsub_history.items()
             },
@@ -373,9 +365,7 @@ class DataManager:
             if not existed and orphaned is None and history is None:
                 return False
             if not existed and orphaned:
-                logger.warning(
-                    f"已清理直播间 {room_id} 的 {len(orphaned)} 条孤立订阅"
-                )
+                logger.warning(f"已清理直播间 {room_id} 的 {len(orphaned)} 条孤立订阅")
         self.save()
         return True
 
@@ -521,9 +511,7 @@ class DataManager:
         with self._lock:
             return self.subscriptions.get(room_id, {}).copy()
 
-    def update_subscription_config(
-        self, room_id: int, umo: str, **kwargs: Any
-    ) -> bool:
+    def update_subscription_config(self, room_id: int, umo: str, **kwargs: Any) -> bool:
         """更新指定订阅的配置
 
         Args:

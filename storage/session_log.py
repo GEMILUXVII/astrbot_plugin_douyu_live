@@ -23,6 +23,7 @@ from astrbot.api import logger
 # 快照最大可信年龄:超过后按无快照处理(过期的"在播"状态没有意义,
 # 且会让状态机以陈旧基线起步)
 STATE_MAX_AGE = 24 * 3600.0
+PENDING_NOTIFICATION_MAX_AGE = 6 * 3600.0
 
 
 class SessionLog:
@@ -119,7 +120,12 @@ class MonitorStateStore:
                 return {}
             out: dict[int, dict[str, Any]] = {}
             for key, value in states.items():
-                if isinstance(key, str) and key.isascii() and key.isdigit() and isinstance(value, dict):
+                if (
+                    isinstance(key, str)
+                    and key.isascii()
+                    and key.isdigit()
+                    and isinstance(value, dict)
+                ):
                     out[int(key)] = value
             return out
         except Exception as e:
@@ -129,3 +135,51 @@ class MonitorStateStore:
             except OSError:
                 pass
             return {}
+
+
+class PendingNotificationStore:
+    """干净重载期间保存尚未确认发送成功的通知。"""
+
+    def __init__(self, data_dir: Path):
+        self.path = data_dir / "pending_notifications.json"
+
+    def save(self, records: list[dict[str, Any]]) -> None:
+        try:
+            if not records:
+                self.path.unlink(missing_ok=True)
+                return
+            payload = {
+                "saved_at": time.time(),
+                "notifications": records,
+            }
+            tmp = self.path.with_suffix(".json.tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+            tmp.replace(self.path)
+        except Exception as e:
+            logger.warning(f"待发送通知快照保存失败: {e}")
+
+    def load_and_clear(self) -> list[dict[str, Any]]:
+        try:
+            if not self.path.exists():
+                return []
+            with open(self.path, encoding="utf-8") as f:
+                payload = json.load(f)
+            self.path.unlink(missing_ok=True)
+            if not isinstance(payload, dict):
+                return []
+            saved_at = float(payload.get("saved_at", 0))
+            if time.time() - saved_at > PENDING_NOTIFICATION_MAX_AGE:
+                logger.warning("待发送通知快照已过期，已忽略")
+                return []
+            records = payload.get("notifications")
+            if not isinstance(records, list):
+                return []
+            return [record for record in records if isinstance(record, dict)]
+        except Exception as e:
+            logger.warning(f"待发送通知快照读取失败，已忽略: {e}")
+            try:
+                self.path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return []

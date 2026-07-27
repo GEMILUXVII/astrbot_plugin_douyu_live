@@ -1,11 +1,23 @@
 """DouyuMonitor 状态机与生命周期测试"""
 
 import asyncio
+import logging
 from types import SimpleNamespace
 
-import astrbot_plugin_douyu_live.core.monitor as monitor_mod
-from astrbot_plugin_douyu_live.core.monitor import DouyuMonitor
+import aiodouyu.monitor as monitor_mod
+from aiodouyu import LiveStatusMonitor as DouyuMonitor
 from conftest import FakeDanmakuClient
+
+
+def test_dependency_logs_are_bridged_once():
+    import astrbot_plugin_douyu_live.core.monitor  # noqa: F401
+
+    handlers = [
+        handler
+        for handler in logging.getLogger("aiodouyu.monitor").handlers
+        if getattr(handler, "_astrbot_douyu_bridge", False)
+    ]
+    assert len(handlers) == 1
 
 
 def test_initial_live_announced(fake_time):
@@ -21,6 +33,25 @@ def test_initial_offline_silent(fake_time):
     m._rss_handler({"ss": "0", "ivl": "0"})
     assert events == []
     assert m.last_live_status is False
+
+
+def test_rss_missing_fields_do_not_create_false_offline(fake_time):
+    """ivl 不是 rss 必有字段;缺失 ivl 仍按 ss=1 开播,缺失 ss 则忽略"""
+    events = []
+    m = DouyuMonitor(
+        1,
+        live_callback=lambda r, msg: events.append("live"),
+        offline_callback=lambda r, d: events.append("off"),
+    )
+
+    m._rss_handler({"ss": "1"})
+    assert events == ["live"]
+    assert m.last_live_status is True
+
+    fake_time.now = 1000.1
+    m._rss_handler({"ivl": "0"})
+    assert events == ["live"]
+    assert m.last_live_status is True
 
 
 def test_cooldown_records_pending_and_reconciles(fake_time):
@@ -137,10 +168,16 @@ async def _drain():
         await asyncio.sleep(0)
 
 
-def test_run_dispatches_rss_and_stop_closes_client():
-    """消费协程分发 rss 到状态机；stop() 关闭客户端并结束任务"""
+def test_run_dispatches_confirmed_rss_and_stop_closes_client(monkeypatch):
+    """消费协程对账确认 rss 后更新状态；stop() 关闭客户端并结束任务"""
 
     async def run():
+        monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
+
+        async def fake_fetch_room(room_id, *, source, timeout):
+            return SimpleNamespace(is_live=True, started_at=None)
+
+        monkeypatch.setattr(monitor_mod, "fetch_room", fake_fetch_room)
         events = []
         client = FakeDanmakuClient()
         m = DouyuMonitor(
@@ -152,7 +189,7 @@ def test_run_dispatches_rss_and_stop_closes_client():
         assert m.is_healthy
 
         client.push({"type": "rss", "ss": "1", "ivl": "0"})
-        await _drain()
+        await asyncio.sleep(0.05)
         assert events == [("live", 5)]
 
         await m.stop()
@@ -192,7 +229,8 @@ def test_connected_event_triggers_resync(monkeypatch):
         client.push({"type": EVENT_CONNECTED, "roomid": "6"})
         await _drain()
         assert m.connected is True  # 事件同步生效,不等对账
-        assert m._resync_pending  # 对账已登记
+        # 校准 tick 很短时对账可能已在此处完成;两种时序都表示请求已登记。
+        assert m._resync_pending or calls == [(6, "betard")]
         await asyncio.sleep(0.05)  # 校准协程执行对账
 
         assert calls == [(6, "betard")]  # 对账固定走 betard（open 不识别轮播）
@@ -205,8 +243,8 @@ def test_connected_event_triggers_resync(monkeypatch):
     asyncio.run(run())
 
 
-def test_resync_failure_is_skipped(monkeypatch):
-    """对账失败不得破坏状态机或杀死协程,且已登记退避重试"""
+def test_resync_failure_keeps_rss_unconfirmed(monkeypatch):
+    """对账失败不得信任 rss、污染状态机或杀死协程"""
 
     async def run():
         monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
@@ -233,10 +271,13 @@ def test_resync_failure_is_skipped(monkeypatch):
         assert m.is_healthy  # 协程仍在运行
         assert m._resync_pending and m._resync_failures == 1  # 已登记重试
 
-        # 后续 rss 仍正常驱动
+        # 后续 rss 只登记候选状态，HTTP 不可用时不能直接触发通知。
         client.push({"type": "rss", "ss": "1", "ivl": "0"})
         await _drain()
-        assert events == ["live"]
+        assert events == []
+        assert m.last_live_status is None
+        assert m._pending_status is True
+        assert m._pending_needs_resync is True
 
         await m.stop()
 
@@ -257,10 +298,15 @@ def test_default_client_factory_config():
 
 
 def test_reconcile_loop_flushes_pending(monkeypatch):
-    """周期校准链路(create_task 接线)必须真实补发冷却期待定转换"""
+    """周期校准链路须在 HTTP 确认后补发冷却期待定转换"""
 
     async def run():
         monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
+
+        async def fake_fetch_room(room_id, *, source, timeout):
+            return SimpleNamespace(is_live=False, started_at=None)
+
+        monkeypatch.setattr(monitor_mod, "fetch_room", fake_fetch_room)
         events = []
         client = FakeDanmakuClient()
         m = DouyuMonitor(
@@ -268,12 +314,12 @@ def test_reconcile_loop_flushes_pending(monkeypatch):
             live_callback=lambda r, msg: events.append("live"),
             offline_callback=lambda r, d: events.append("off"),
             client_factory=lambda: client,
+            offline_confirmation=0,
         )
         m.start()
-        client.push({"type": "rss", "ss": "1", "ivl": "0"})  # 开播播报
-        await _drain()
+        m._rss_handler({"ss": "1", "ivl": "0"})  # 注入已确认的开播状态
         client.push({"type": "rss", "ss": "0", "ivl": "0"})  # 冷却期内下播
-        await _drain()
+        await asyncio.sleep(0.05)
         assert events == ["live"]
         assert m._pending_status is False
 
@@ -283,10 +329,85 @@ def test_reconcile_loop_flushes_pending(monkeypatch):
 
         await m.stop()
         # 无残留任务(reconcile/消费协程都已回收)
-        leftovers = [
-            t for t in asyncio.all_tasks() if t is not asyncio.current_task()
-        ]
+        leftovers = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         assert leftovers == []
+
+    asyncio.run(run())
+
+
+def test_reverse_rss_in_cooldown_is_cleared_when_resync_still_live(monkeypatch):
+    """开播后紧随的反向 rss 必须对账;真实仍在播时不能在 30 秒后假下播"""
+
+    async def run():
+        monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
+        monkeypatch.setattr(monitor_mod, "RSS_CONFIRM_WINDOW", 0)
+        calls = []
+
+        async def fake_fetch_room(room_id, *, source, timeout):
+            calls.append((room_id, source))
+            return SimpleNamespace(is_live=True, started_at=900.0)
+
+        monkeypatch.setattr(monitor_mod, "fetch_room", fake_fetch_room)
+
+        events = []
+        client = FakeDanmakuClient()
+        m = DouyuMonitor(
+            12725169,
+            live_callback=lambda r, msg: events.append("live"),
+            offline_callback=lambda r, d: events.append("off"),
+            client_factory=lambda: client,
+        )
+        m.start()
+
+        m._rss_handler({"ss": "1", "ivl": "0"})  # 注入已确认的开播状态
+        client.push({"type": "rss", "ss": "0", "ivl": "0"})
+        await asyncio.sleep(0.05)
+
+        assert calls == [(12725169, "betard")]
+        assert events == ["live"]
+        assert m._pending_status is None
+        assert m.last_live_status is True
+
+        # 即使强制跨过冷却期,已被真实状态否决的假下播也不能复活。
+        m._last_notify_time = 0.0
+        await asyncio.sleep(0.03)
+        assert events == ["live"]
+        await m.stop()
+
+    asyncio.run(run())
+
+
+def test_unconfirmed_reverse_rss_waits_when_resync_fails(monkeypatch):
+    """HTTP 暂时失败时不得在冷却结束后盲目补发反向 rss"""
+
+    async def run():
+        monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
+
+        async def failing_fetch_room(room_id, *, source, timeout):
+            raise RuntimeError("betard unavailable")
+
+        monkeypatch.setattr(monitor_mod, "fetch_room", failing_fetch_room)
+
+        events = []
+        client = FakeDanmakuClient()
+        m = DouyuMonitor(
+            21,
+            live_callback=lambda r, msg: events.append("live"),
+            offline_callback=lambda r, d: events.append("off"),
+            client_factory=lambda: client,
+        )
+        m.start()
+        m._rss_handler({"ss": "1", "ivl": "0"})  # 注入已确认的开播状态
+        client.push({"type": "rss", "ss": "0", "ivl": "0"})
+        await asyncio.sleep(0.03)
+
+        assert m._pending_status is False
+        assert m._pending_needs_resync is True
+        m._last_notify_time = 0.0
+        m._reconcile_pending()
+        assert events == ["live"]
+        assert m.last_live_status is True
+        await m.stop()
 
     asyncio.run(run())
 
@@ -365,10 +486,11 @@ def test_resync_stale_snapshot_discarded(monkeypatch):
         await asyncio.sleep(0.05)  # 首次对账进入 fetch 并挂起
         assert calls == [1]
 
-        # fetch 在途期间收到 rss:真实开播,状态机前进并播报
+        # fetch 在途期间收到 rss：它只能登记候选状态，不能越过 HTTP 确认。
         client.push({"type": "rss", "ss": "1", "ivl": "0"})
         await _drain()
-        assert events == ["live"]
+        assert events == []
+        assert m._pending_status is True
 
         gate.set()  # 过期快照(未开播)此刻返回
         await asyncio.sleep(0.05)  # 校准协程完成首次对账并重拉
@@ -407,9 +529,8 @@ def test_resync_overflow_clamped(monkeypatch):
         assert m._resync_pending  # 重试仍在调度
         assert m.is_healthy
 
-        # 校准协程仍活着:pending 补发路径仍工作
-        client.push({"type": "rss", "ss": "1", "ivl": "0"})
-        await _drain()
+        # 校准协程仍活着，可信状态注入路径也仍工作。
+        m._rss_handler({"ss": "1", "ivl": "0"})
         assert m.last_live_status is True
 
         await m.stop()
@@ -612,8 +733,10 @@ def test_resync_compensates_missed_transition(monkeypatch):
         monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
         events = []
 
+        snapshots = iter([True, False])
+
         async def fake_fetch_room(room_id, *, source, timeout):
-            return SimpleNamespace(is_live=True, started_at=None)
+            return SimpleNamespace(is_live=next(snapshots), started_at=None)
 
         monkeypatch.setattr(monitor_mod, "fetch_room", fake_fetch_room)
 
@@ -632,6 +755,7 @@ def test_resync_compensates_missed_transition(monkeypatch):
                 "pending_msg": None,
             },
             client_factory=lambda: client,
+            offline_confirmation=0,
         )
         m.start()
         from aiodouyu import EVENT_CONNECTED
@@ -645,7 +769,7 @@ def test_resync_compensates_missed_transition(monkeypatch):
         # 之后正常收到下播 rss,不能被"回稳"分支吞掉
         m._last_notify_time = 0.0  # 跳过冷却期,聚焦转换正确性
         client.push({"type": "rss", "ss": "0", "ivl": "0"})
-        await _drain()
+        await asyncio.sleep(0.05)
         assert events == ["live", "off"]
 
         await m.stop()

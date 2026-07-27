@@ -17,9 +17,8 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 
 
 def _fmt_beijing(timestamp: float) -> str:
-    return datetime.fromtimestamp(timestamp, BEIJING_TZ).strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
+    return datetime.fromtimestamp(timestamp, BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
 
 if TYPE_CHECKING:
     from astrbot.api import star
@@ -151,8 +150,8 @@ class Notifier:
 
         Returns:
             发送失败且值得重试的 umo 集合。
-            send_message 返回 False（无匹配平台）的目标不计入——
-            平台不存在时重试不会成功。
+            send_message 返回 False 通常表示平台正在重载或尚未就绪，
+            同样交给上层持续重试。
         """
         failed: set[str] = set()
         semaphore = asyncio.Semaphore(SEND_CONCURRENCY)
@@ -172,14 +171,14 @@ class Notifier:
                         timeout=SEND_TIMEOUT,
                     )
                     if ok:
-                        logger.debug(f"已发送通知到: {umo} (at_all={at_all})")
+                        logger.info(f"斗鱼通知发送成功: {umo} (at_all={at_all})")
                     else:
-                        # 未找到匹配的平台适配器，重试无意义
                         logger.warning(
-                            f"发送通知失败: 未找到匹配的平台适配器 ({umo})，不重试"
+                            f"斗鱼通知暂未发送: 未找到匹配的平台适配器 ({umo})"
                         )
+                        failed.add(umo)
                 except Exception as e:
-                    logger.warning(f"发送通知失败 ({umo}): {e}")
+                    logger.warning(f"斗鱼通知发送失败 ({umo}): {e}")
                     failed.add(umo)
 
         await asyncio.gather(

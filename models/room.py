@@ -16,6 +16,7 @@ class RoomInfo:
         added_by: 添加者 ID
         added_time: 添加时间
     """
+
     name: str
     added_by: str = ""
     added_time: str = ""

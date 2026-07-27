@@ -225,7 +225,7 @@ def data_dir(tmp_path):
 @pytest.fixture
 def fake_time():
     """把 monitor 模块的 time 换成可控替身"""
-    import astrbot_plugin_douyu_live.core.monitor as monitor_mod
+    import aiodouyu.monitor as monitor_mod
 
     ft = FakeTime()
     real = monitor_mod.time

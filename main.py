@@ -3,6 +3,8 @@
 支持多房间监控、订阅推送、@全体成员等功能。
 """
 
+from __future__ import annotations
+
 import asyncio
 import time
 from dataclasses import dataclass, field
@@ -15,12 +17,14 @@ from astrbot.core.star.filter.command import GreedyStr
 from .core import DouyuMonitor, Notifier
 from .models import RoomInfo
 from .storage import DataManager
-from .storage.session_log import MonitorStateStore, SessionLog
+from .storage.session_log import (
+    MonitorStateStore,
+    PendingNotificationStore,
+    SessionLog,
+)
 from .utils.ratelimit import RoomInfoCache
 from .utils.text import sanitize_display_text
 
-# 通知最大发送尝试次数（含首次发送，即最多重试 NOTIFY_MAX_RETRIES-1 轮）
-NOTIFY_MAX_RETRIES = 5
 # 通知队列容量上限（防止无界增长）
 NOTIFY_QUEUE_MAX = 1000
 # 队列处理轮询间隔（秒）
@@ -30,6 +34,8 @@ NOTIFY_POLL_INTERVAL = 0.5
 # （此前重试间隔只有轮询周期 0.5s，5 次重试约 2.5s 内耗尽，形同虚设）
 NOTIFY_RETRY_BACKOFF_BASE = 5.0
 NOTIFY_RETRY_BACKOFF_MAX = 120.0
+# Stop retrying stale notifications after a prolonged platform outage.
+NOTIFY_MAX_AGE = 6 * 3600.0
 # 同一房间同类通知的去重窗口（秒）：重启交接等场景下吸收重复的开播/下播事件
 NOTIFY_DEDUP_TTL = 10.0
 # watchdog 检查间隔与新监控启动宽限期（秒）
@@ -56,7 +62,10 @@ class PendingNotification:
     可 await)首次投递前构建,富化外呼不占用监控回调路径。
     message 字段保留兼容:非空时跳过构建直接发送。
     """
-    subscriber_settings: dict[str, bool] = field(default_factory=dict)  # {umo -> at_all}
+
+    subscriber_settings: dict[str, bool] = field(
+        default_factory=dict
+    )  # {umo -> at_all}
     message: str = ""
     retry_count: int = 0
     next_attempt_at: float = 0.0  # monotonic 时间，早于此不投递
@@ -68,12 +77,56 @@ class PendingNotification:
     event_ts: float = 0.0  # 事件发生时刻(epoch)
     cover_url: str | None = None  # 构建时填充
 
+    def to_record(self) -> dict:
+        return {
+            "subscriber_settings": self.subscriber_settings,
+            "message": self.message,
+            "retry_count": self.retry_count,
+            "retry_after": max(self.next_attempt_at - time.monotonic(), 0.0),
+            "kind": self.kind,
+            "room_id": self.room_id,
+            "room_name": self.room_name,
+            "duration": self.duration,
+            "event_ts": self.event_ts,
+            "cover_url": self.cover_url,
+        }
+
+    @classmethod
+    def from_record(cls, record: dict) -> PendingNotification | None:
+        settings = record.get("subscriber_settings")
+        if not isinstance(settings, dict):
+            return None
+        try:
+            return cls(
+                subscriber_settings={
+                    str(umo): bool(at_all) for umo, at_all in settings.items()
+                },
+                message=str(record.get("message", "")),
+                retry_count=max(int(record.get("retry_count", 0)), 0),
+                next_attempt_at=(
+                    time.monotonic() + max(float(record.get("retry_after", 0.0)), 0.0)
+                ),
+                kind=str(record.get("kind", "")),
+                room_id=max(int(record.get("room_id", 0)), 0),
+                room_name=str(record.get("room_name", "")),
+                duration=max(float(record.get("duration", 0.0)), 0.0),
+                event_ts=max(float(record.get("event_ts", 0.0)), 0.0),
+                cover_url=(
+                    str(record["cover_url"])
+                    if record.get("cover_url") is not None
+                    else None
+                ),
+            )
+        except (TypeError, ValueError):
+            return None
+
 
 def _retry_backoff(retry_count: int) -> float:
     """第 retry_count 次重试的退避秒数"""
+    exponent = min(max(retry_count - 1, 0), 3)
     return min(
         NOTIFY_RETRY_BACKOFF_MAX,
-        NOTIFY_RETRY_BACKOFF_BASE * (3 ** (retry_count - 1)),
+        NOTIFY_RETRY_BACKOFF_BASE * (3**exponent),
     )
 
 
@@ -113,6 +166,7 @@ class Main(star.Star):
             retention_days=int(self._cfg("session_log_retention_days")),
         )
         self._state_store = MonitorStateStore(self.data.data_dir)
+        self._pending_store = PendingNotificationStore(self.data.data_dir)
         # 启动回灌的监控状态(load 后按房间一次性消费)
         self._boot_states: dict[int, dict] = {}
 
@@ -138,9 +192,23 @@ class Main(star.Star):
         """插件激活时启动所有监控"""
         self._closing = False
         # 回灌上次干净关停的监控状态(一次性),清理超期场次
-        self._boot_states = await asyncio.to_thread(
-            self._state_store.load_and_clear
+        self._boot_states = await asyncio.to_thread(self._state_store.load_and_clear)
+        saved_notifications = await asyncio.to_thread(
+            self._pending_store.load_and_clear
         )
+        restored = 0
+        for record in saved_notifications:
+            item = PendingNotification.from_record(record)
+            if item is None or not item.subscriber_settings:
+                continue
+            try:
+                self._notification_queue.put_nowait(item)
+                restored += 1
+            except asyncio.QueueFull:
+                logger.error("通知队列已满，部分重载前待发送通知无法恢复")
+                break
+        if restored:
+            logger.info(f"已恢复 {restored} 条重载前尚未发送成功的斗鱼通知")
         await asyncio.to_thread(self.sessions.prune)
         # 启动通知队列处理与监控看门狗任务
         self._queue_processor_task = asyncio.create_task(
@@ -150,9 +218,7 @@ class Main(star.Star):
 
         # 启动所有已保存房间的监控（start 仅创建协程任务，不阻塞）
         room_ids = self.data.get_all_room_ids()
-        results = await asyncio.gather(
-            *(self._start_monitor(rid) for rid in room_ids)
-        )
+        results = await asyncio.gather(*(self._start_monitor(rid) for rid in room_ids))
         started = sum(1 for ok in results if ok)
         logger.info(
             f"斗鱼直播通知插件已启动，成功启动 {started}/{len(room_ids)} 个直播间监控"
@@ -162,15 +228,13 @@ class Main(star.Star):
         """插件禁用时停止所有监控"""
         # 先拒绝新监控的创建（正在 await 中的 restart/start 会在复查时放弃）
         self._closing = True
-        # 停止后台任务
-        for task in (self._queue_processor_task, self._watchdog_task):
-            if task:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-        self._queue_processor_task = None
+
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
+            try:
+                await self._watchdog_task
+            except asyncio.CancelledError:
+                pass
         self._watchdog_task = None
 
         # 并发停止所有监控;停止后导出状态快照供下次启动回灌
@@ -183,6 +247,29 @@ class Main(star.Star):
             await asyncio.to_thread(
                 self._state_store.save,
                 {rid: m.export_state() for rid, m in monitor_map.items()},
+            )
+
+        if self._queue_processor_task:
+            self._queue_processor_task.cancel()
+            try:
+                await self._queue_processor_task
+            except asyncio.CancelledError:
+                pass
+        self._queue_processor_task = None
+
+        pending_items: list[PendingNotification] = []
+        while True:
+            try:
+                pending_items.append(self._notification_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        await asyncio.to_thread(
+            self._pending_store.save,
+            [item.to_record() for item in pending_items],
+        )
+        if pending_items:
+            logger.info(
+                f"已保存 {len(pending_items)} 条尚未发送成功的通知，重载后继续发送"
             )
         # 注：数据在每次变更时已即时保存，此处无需（也不应）再次保存
         logger.info("斗鱼直播通知插件已停止")
@@ -291,8 +378,7 @@ class Main(star.Star):
                     # 新启动的监控给予宽限期，避免误判
                     if (
                         monitor
-                        and time.time() - monitor.created_at
-                        < WATCHDOG_STARTUP_GRACE
+                        and time.time() - monitor.created_at < WATCHDOG_STARTUP_GRACE
                     ):
                         continue
                     logger.warning(
@@ -313,70 +399,76 @@ class Main(star.Star):
         """处理通知队列的后台任务
 
         所有通知（监控协程投递）都经由此任务串行发送：
-        保证发送顺序、限制并发，并对失败目标做指数退避的有限重试。
+        保证发送顺序、限制并发，并对失败目标做有时限的持续退避重试。
         """
         while True:
+            item: PendingNotification | None = None
             try:
                 await asyncio.sleep(NOTIFY_POLL_INTERVAL)
+                try:
+                    item = self._notification_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    continue
+                if item.next_attempt_at > time.monotonic():
+                    self._notification_queue.put_nowait(item)
+                    item = None
+                    continue
 
-                # 先取空队列再处理；未到重试时间的项原样放回，下轮再看
-                pending_items: list[PendingNotification] = []
-                while True:
-                    try:
-                        pending_items.append(self._notification_queue.get_nowait())
-                    except asyncio.QueueEmpty:
-                        break
+                if not item.message:
+                    await self._build_notification_message(item)
+                use_at_all = item.retry_count < 2
+                cover = item.cover_url if item.retry_count < 1 else None
+                kind_name = "开播" if item.kind == "live" else "下播"
+                logger.info(
+                    f"正在发送斗鱼{kind_name}通知: "
+                    f"房间 {item.room_id}，目标 {len(item.subscriber_settings)} 个"
+                )
+                failed = await self.notifier.send_to_subscribers(
+                    item.subscriber_settings,
+                    item.message,
+                    use_at_all=use_at_all,
+                    cover_url=cover,
+                )
+                if not failed:
+                    item = None
+                    continue
 
-                # 未到重试时间的项先同步放回（取空与放回之间无 await，
-                # 不会与新投递竞争容量），到期项再逐个发送
-                now = time.monotonic()
-                due_items: list[PendingNotification] = []
-                for item in pending_items:
-                    if item.next_attempt_at > now:
-                        self._notification_queue.put_nowait(item)
-                    else:
-                        due_items.append(item)
-
-                for item in due_items:
-                    if not item.message:
-                        await self._build_notification_message(item)
-                    # 多轮重试后降级:先弃封面图(可能被平台拒收),再弃 @全体
-                    use_at_all = item.retry_count < 2
-                    cover = item.cover_url if item.retry_count < 1 else None
-                    failed = await self.notifier.send_to_subscribers(
-                        item.subscriber_settings,
-                        item.message,
-                        use_at_all=use_at_all,
-                        cover_url=cover,
+                item.retry_count += 1
+                if item.event_ts > 0 and time.time() - item.event_ts >= NOTIFY_MAX_AGE:
+                    logger.error(
+                        f"斗鱼通知已超过 {NOTIFY_MAX_AGE / 3600:.0f} 小时，"
+                        f"停止重试 {len(failed)} 个目标"
                     )
-                    if not failed:
-                        continue
-                    item.retry_count += 1
-                    if item.retry_count >= NOTIFY_MAX_RETRIES:
-                        logger.error(
-                            f"通知发送失败，已达最大重试次数，"
-                            f"放弃 {len(failed)} 个目标"
-                        )
-                        continue
-                    # 只重试失败的目标，避免对已成功目标重复发送；
-                    # 按指数退避安排下次尝试，扛住分钟级平台抖动
-                    item.subscriber_settings = {
-                        umo: item.subscriber_settings[umo] for umo in failed
-                    }
-                    backoff = _retry_backoff(item.retry_count)
-                    item.next_attempt_at = time.monotonic() + backoff
+                    item = None
+                    continue
+                item.subscriber_settings = {
+                    umo: item.subscriber_settings[umo] for umo in failed
+                }
+                backoff = _retry_backoff(item.retry_count)
+                item.next_attempt_at = time.monotonic() + backoff
+                self._notification_queue.put_nowait(item)
+                logger.warning(
+                    f"{len(failed)} 个目标发送失败，{backoff:.0f}s 后重试 "
+                    f"(第 {item.retry_count} 次)"
+                )
+                item = None
+            except asyncio.CancelledError:
+                if item is not None:
                     try:
                         self._notification_queue.put_nowait(item)
-                        logger.warning(
-                            f"{len(failed)} 个目标发送失败，{backoff:.0f}s 后重试 "
-                            f"({item.retry_count}/{NOTIFY_MAX_RETRIES})"
-                        )
                     except asyncio.QueueFull:
-                        logger.error("通知队列已满，放弃重试")
-            except asyncio.CancelledError:
+                        logger.error("通知队列已满，无法保存被重载中断的通知")
                 raise
             except Exception as e:
                 logger.error(f"通知队列处理器出错: {e}", exc_info=True)
+                if item is not None:
+                    try:
+                        item.next_attempt_at = (
+                            time.monotonic() + NOTIFY_RETRY_BACKOFF_BASE
+                        )
+                        self._notification_queue.put_nowait(item)
+                    except asyncio.QueueFull:
+                        logger.error("通知队列已满，无法恢复处理异常的通知")
 
     def _log_session_event(
         self,
@@ -426,8 +518,11 @@ class Main(star.Star):
             )
             # 场次落盘:开播事件(带富化到的标题/分类)
             self._log_session_event(
-                "start", item.room_id, item.event_ts,
-                title=title or "", category=category or "",
+                "start",
+                item.room_id,
+                item.event_ts,
+                title=title or "",
+                category=category or "",
             )
         elif item.kind == "offline":
             item.message = self.notifier.build_offline_notification(
@@ -446,7 +541,7 @@ class Main(star.Star):
         message: str = "",
         dedup_key: tuple[str, int] | None = None,
         **fields,
-    ) -> None:
+    ) -> bool:
         """调度通知发送（仅在事件循环上调用）
 
         Args:
@@ -457,8 +552,8 @@ class Main(star.Star):
             **fields: PendingNotification 的结构化事件字段
                 (kind/room_id/room_name/duration/event_ts)
         """
-        if not subscriber_settings:
-            return
+        if self._closing or not subscriber_settings:
+            return False
         now = time.monotonic()
         if dedup_key is not None:
             last = self._notify_dedup.get(dedup_key, 0.0)
@@ -466,7 +561,7 @@ class Main(star.Star):
                 logger.debug(
                     f"通知去重: {dedup_key} 在 {NOTIFY_DEDUP_TTL}s 窗口内重复，忽略"
                 )
-                return
+                return False
         try:
             self._notification_queue.put_nowait(
                 PendingNotification(
@@ -477,17 +572,17 @@ class Main(star.Star):
             )
         except asyncio.QueueFull:
             logger.error("通知队列已满，丢弃一条通知")
-            return
+            return False
         # 入队成功才记录去重时间戳：若先记后投、投递因队满失败，
         # 同事件在窗口内的补发会被误吸收
         if dedup_key is not None:
             self._notify_dedup[dedup_key] = now
             # 顺手清理过期条目，字典规模上界为 2×房间数
             for key in [
-                k for k, t in self._notify_dedup.items()
-                if now - t >= NOTIFY_DEDUP_TTL
+                k for k, t in self._notify_dedup.items() if now - t >= NOTIFY_DEDUP_TTL
             ]:
                 del self._notify_dedup[key]
+        return True
 
     # ==================== 监控回调（运行于事件循环）====================
 
@@ -495,6 +590,7 @@ class Main(star.Star):
         """开播回调 - 登记结构化事件,消息在队列侧构建(含富化)"""
         sub_configs = self.data.get_all_subscription_configs(room_id)
         if not sub_configs:
+            logger.info(f"直播间 {room_id} 已确认开播，但当前没有订阅目标")
             return
 
         room_info = self.data.get_room(room_id)
@@ -503,7 +599,7 @@ class Main(star.Star):
         subscriber_settings = {
             umo: config.at_all for umo, config in sub_configs.items()
         }
-        self._schedule_notification(
+        scheduled = self._schedule_notification(
             subscriber_settings,
             dedup_key=("live", room_id),
             kind="live",
@@ -511,6 +607,11 @@ class Main(star.Star):
             room_name=room_name,
             event_ts=time.time(),
         )
+        if scheduled:
+            logger.info(
+                f"直播间 {room_id} 已确认开播，通知已入队 "
+                f"(目标 {len(subscriber_settings)} 个)"
+            )
 
     def _on_live_end(self, room_id: int, duration_seconds: float) -> None:
         """下播回调 - 发送下播通知给所有订阅者
@@ -521,6 +622,7 @@ class Main(star.Star):
         """
         sub_configs = self.data.get_all_subscription_configs(room_id)
         if not sub_configs:
+            logger.info(f"直播间 {room_id} 已确认下播，但当前没有订阅目标")
             return
 
         room_info = self.data.get_room(room_id)
@@ -533,7 +635,7 @@ class Main(star.Star):
             if getattr(config, "offline_notify", True)
         }
 
-        self._schedule_notification(
+        scheduled = self._schedule_notification(
             subscriber_settings,
             dedup_key=("offline", room_id),
             kind="offline",
@@ -542,6 +644,11 @@ class Main(star.Star):
             duration=duration_seconds,
             event_ts=time.time(),
         )
+        if scheduled:
+            logger.info(
+                f"直播间 {room_id} 已确认下播，通知已入队 "
+                f"(目标 {len(subscriber_settings)} 个)"
+            )
 
     # ==================== 命令辅助 ====================
 
@@ -571,9 +678,13 @@ class Main(star.Star):
 
         sub_config = self.data.get_subscription_config(room_id, umo)
         if not sub_config:
-            return None, False, (
-                f"注意: 当前群还没有订阅直播间 {room_id}\n"
-                f"请先使用 /douyu sub {room_id} 订阅"
+            return (
+                None,
+                False,
+                (
+                    f"注意: 当前群还没有订阅直播间 {room_id}\n"
+                    f"请先使用 /douyu sub {room_id} 订阅"
+                ),
             )
 
         enable = enable.strip().lower()
@@ -586,7 +697,11 @@ class Main(star.Star):
         else:
             # 不认识的参数不能当"切换"处理——用户想强制开启时误触发
             # 取反会得到与预期相反的结果
-            return None, False, f"注意: 无法识别的参数「{enable}」，请使用 on/off 或留空切换"
+            return (
+                None,
+                False,
+                f"注意: 无法识别的参数「{enable}」，请使用 on/off 或留空切换",
+            )
 
         # 保存含磁盘 I/O，移出事件循环执行
         await asyncio.to_thread(
@@ -623,7 +738,7 @@ class Main(star.Star):
         """查看命令帮助"""
         lines = [
             "【斗鱼开播通知 - 命令帮助】",
-                        "订阅(所有人):",
+            "订阅(所有人):",
             "  /douyu ls - 查看监控列表",
             "  /douyu live - 查看当前在播的房间",
             "  /douyu sub <房间号> - 订阅开播通知",
@@ -771,7 +886,9 @@ class Main(star.Star):
         """查看监控列表"""
         rooms = self.data.get_all_rooms()
         if not rooms:
-            yield event.plain_result("当前没有监控的直播间\n使用 /douyu add <房间号> 添加")
+            yield event.plain_result(
+                "当前没有监控的直播间\n使用 /douyu add <房间号> 添加"
+            )
             return
 
         lines = ["【斗鱼监控列表】"]
@@ -930,15 +1047,11 @@ class Main(star.Star):
             sub_config = self.data.get_subscription_config(room_id, umo)
             if sub_config:
                 at_all_icon = "开" if sub_config.at_all else "关"
-                my_subs.append(
-                    f"• {room_name} ({room_id})\n  @全体:{at_all_icon}"
-                )
+                my_subs.append(f"• {room_name} ({room_id})\n  @全体:{at_all_icon}")
             else:
                 my_subs.append(f"• {room_name} ({room_id})")
 
-        yield event.plain_result(
-            "【本群订阅列表】\n" + "\n".join(my_subs)
-        )
+        yield event.plain_result("【本群订阅列表】\n" + "\n".join(my_subs))
 
     @douyu.command("status")
     async def douyu_status(self, event: AstrMessageEvent):
@@ -956,9 +1069,7 @@ class Main(star.Star):
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @douyu.command("restart")
-    async def douyu_restart(
-        self, event: AstrMessageEvent, room_id: int | None = None
-    ):
+    async def douyu_restart(self, event: AstrMessageEvent, room_id: int | None = None):
         """重启监控（管理员）
 
         Args:
@@ -983,9 +1094,7 @@ class Main(star.Star):
                 else:
                     logger.warning(f"重启直播间 {rid} 监控失败")
 
-            yield event.plain_result(
-                f"已重启 {success}/{len(room_ids)} 个直播间监控"
-            )
+            yield event.plain_result(f"已重启 {success}/{len(room_ids)} 个直播间监控")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @douyu.command("atall")

@@ -44,8 +44,17 @@ def test_conf_schema_valid_and_matches_defaults():
     root = Path(__file__).resolve().parent.parent
     schema = json.loads((root / "_conf_schema.json").read_text(encoding="utf-8"))
     # 宿主 DEFAULT_VALUE_MAP 白名单(core/config/default.py)
-    allowed = {"int", "float", "bool", "string", "text", "list", "file",
-               "object", "template_list"}
+    allowed = {
+        "int",
+        "float",
+        "bool",
+        "string",
+        "text",
+        "list",
+        "file",
+        "object",
+        "template_list",
+    }
     for key, spec in schema.items():
         assert spec["type"] in allowed, f"{key} 类型 {spec['type']} 不在宿主白名单"
         assert "description" in spec and "default" in spec
@@ -149,7 +158,8 @@ def test_live_notification_enriched_in_queue(make_main, monkeypatch):
 
     async def fake_get(room_id, **kwargs):
         return SimpleNamespace(
-            title="今晚上分", category="DOTA2",
+            title="今晚上分",
+            category="DOTA2",
             cover_url="https://x/cover.jpg",
         )
 
@@ -280,9 +290,12 @@ def test_session_log_append_and_prune(data_dir):
     log.append(940, {"e": "start", "ts": old_ts, "title": "旧", "cat": ""})
     log.append(940, {"e": "start", "ts": time.time(), "title": "新", "cat": "x"})
     log.prune()
-    lines = (Path(data_dir) / "sessions" / "940.jsonl").read_text(
-        encoding="utf-8"
-    ).strip().splitlines()
+    lines = (
+        (Path(data_dir) / "sessions" / "940.jsonl")
+        .read_text(encoding="utf-8")
+        .strip()
+        .splitlines()
+    )
     assert len(lines) == 1 and "新" in lines[0]
 
     disabled = SessionLog(Path(data_dir), retention_days=0)
@@ -311,6 +324,18 @@ def test_monitor_state_store_stale_ignored(data_dir):
     payload["saved_at"] = time.time() - sl.STATE_MAX_AGE - 10
     store.path.write_text(json.dumps(payload), encoding="utf-8")
     assert store.load_and_clear() == {}
+
+
+def test_pending_notification_store_is_one_shot(data_dir):
+    from astrbot_plugin_douyu_live.storage.session_log import (
+        PendingNotificationStore,
+    )
+
+    store = PendingNotificationStore(Path(data_dir))
+    records = [{"message": "hello", "subscriber_settings": {"umo": False}}]
+    store.save(records)
+    assert store.load_and_clear() == records
+    assert store.load_and_clear() == []
 
 
 # ==================== catchup_announce ====================
