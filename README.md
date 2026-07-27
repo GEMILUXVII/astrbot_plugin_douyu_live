@@ -11,7 +11,7 @@
 <br>
 
 <div align="center">
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-v2.2.4-9644F4?style=for-the-badge" alt="Version"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-v2.2.5-9644F4?style=for-the-badge" alt="Version"></a>
   <a href="https://github.com/GEMILUXVII/astrbot_plugin_douyu_live/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-E53935?style=for-the-badge" alt="License"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"></a>
   <a href="https://github.com/AstrBotDevs/AstrBot"><img src="https://img.shields.io/badge/AstrBot-Compatible-00BFA5?style=for-the-badge&logo=robot&logoColor=white" alt="AstrBot Compatible"></a>
@@ -75,7 +75,7 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 2. **重启/重载 AstrBot**
 
    在 WebUI 重载插件，或直接重启 AstrBot。AstrBot 会按
-   `requirements.txt` 从 PyPI 安装 `aiodouyu>=0.4.3,<0.5`，不会从相邻
+   `requirements.txt` 从 PyPI 安装 `aiodouyu>=0.4.4,<0.5`，不会从相邻
    源码目录导入。
 
 ## 命令列表

@@ -140,8 +140,9 @@ def test_pending_state_survives_restart(fake_time):
     )
     fake_time.now = 1031.0
     m2._reconcile_pending()
-    # 时长终点是观测时刻(1010),跨重启继承后依然不含补发延迟
-    assert events == [("off", 10)]
+    assert events == []
+    assert m2._pending_status is False
+    assert m2._pending_needs_resync is True
 
 
 def test_stop_flag_blocks_handlers():
@@ -547,6 +548,7 @@ def test_resync_runs_before_expired_pending(monkeypatch):
 
     async def run():
         monkeypatch.setattr(monitor_mod, "RECONCILE_INTERVAL", 0.01)
+        monkeypatch.setattr(monitor_mod, "RSS_CONFIRM_WINDOW", 0)
         events = []
 
         async def fake_fetch_room(room_id, *, source, timeout):
