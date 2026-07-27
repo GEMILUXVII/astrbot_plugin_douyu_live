@@ -23,6 +23,12 @@
     "hint": "抖动抑制窗口;期间的真实转换会在冷却结束后补发",
     "default": 30
   },
+  "status_reconcile_interval": {
+    "description": "直播状态 HTTP 兜底对账间隔(秒)",
+    "type": "int",
+    "hint": "弹幕未连接或漏掉状态事件时仍会定期校准;0 表示关闭",
+    "default": 300
+  },
   "subscribe_permission": {
     "description": "订阅类命令(sub/unsub/offline)的权限档位",
     "type": "string",

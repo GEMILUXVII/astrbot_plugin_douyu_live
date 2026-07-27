@@ -77,10 +77,21 @@ def test_cfg_fallback_and_override(make_main):
         async def send_message(self, umo, result):
             return True
 
-    m2 = Main(Ctx(), config={"notify_enrich": False, "notify_cooldown": 5})
+    m2 = Main(
+        Ctx(),
+        config={
+            "notify_enrich": False,
+            "notify_cooldown": 5,
+            "status_reconcile_interval": 0,
+        },
+    )
     assert m2._cfg("notify_enrich") is False
     assert m2._cfg("notify_cooldown") == 5
     assert m2._cfg("subscribe_permission") == "everyone"  # 未覆盖走默认
+    assert m2._new_monitor(1)._periodic_resync_interval == 0
+
+    m3 = Main(Ctx())
+    assert m3._new_monitor(1)._periodic_resync_interval == 300
 
 
 # ==================== offline 开关 ====================

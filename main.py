@@ -49,6 +49,7 @@ DEFAULT_CONFIG = {
     "notify_cover": True,
     "catchup_announce": True,
     "notify_cooldown": 30,
+    "status_reconcile_interval": 300,
     "subscribe_permission": "everyone",
     "session_log_retention_days": 90,
 }
@@ -295,6 +296,7 @@ class Main(star.Star):
             inherit_state=inherit_state,
             notify_cooldown=float(self._cfg("notify_cooldown")),
             announce_initial_live=bool(self._cfg("catchup_announce")),
+            periodic_resync_interval=float(self._cfg("status_reconcile_interval")),
         )
 
     def _room_lock(self, room_id: int) -> asyncio.Lock:

@@ -75,7 +75,7 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 2. **重启/重载 AstrBot**
 
    在 WebUI 重载插件，或直接重启 AstrBot。AstrBot 会按
-   `requirements.txt` 从 PyPI 安装 `aiodouyu>=0.4.4,<0.5`，不会从相邻
+   `requirements.txt` 从 PyPI 安装 `aiodouyu>=0.4.5,<0.5`，不会从相邻
    源码目录导入。
 
 ## 命令列表
@@ -105,7 +105,8 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 | `/douyu status`         | 查看监控状态   | `/douyu status`         |
 
 > 2.2.0 起支持 WebUI 插件配置(通知富化/封面图/重启补播报/通知冷却/
-> 订阅权限档位/场次保留天数),见 AstrBot 管理面板的插件配置页。
+> HTTP 兜底对账间隔/订阅权限档位/场次保留天数),见 AstrBot 管理面板的
+> 插件配置页。
 > 开播通知默认附带直播间标题、分类与封面图;场次历史落盘于插件数据
 > 目录 `sessions/`,供后续统计功能使用。
 
