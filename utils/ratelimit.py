@@ -14,18 +14,18 @@ from aiodouyu import RoomInfo, fetch_room
 class RoomInfoCache:
     """房间信息缓存(仅事件循环访问)
 
-    - TTL 内直接命中,不外呼
+    - TTL 内按 ``(room_id, source)`` 命中,不同数据源互不污染
     - 未命中时经信号量限并发拉取,双检避免同房间重复外呼
     - 失败不缓存(下次调用重试),异常原样抛给调用方决定降级方式
     """
 
     def __init__(self, ttl: float = 60.0, concurrency: int = 5):
         self._ttl = ttl
-        self._cache: dict[int, tuple[float, RoomInfo]] = {}
+        self._cache: dict[tuple[int, str], tuple[float, RoomInfo]] = {}
         self._sem = asyncio.Semaphore(concurrency)
 
-    def _hit(self, room_id: int) -> RoomInfo | None:
-        entry = self._cache.get(room_id)
+    def _hit(self, room_id: int, source: str) -> RoomInfo | None:
+        entry = self._cache.get((room_id, source))
         if entry and time.monotonic() - entry[0] < self._ttl:
             return entry[1]
         return None
@@ -33,13 +33,13 @@ class RoomInfoCache:
     async def get(
         self, room_id: int, *, source: str = "auto", timeout: float = 5.0
     ) -> RoomInfo:
-        info = self._hit(room_id)
+        info = self._hit(room_id, source)
         if info is not None:
             return info
         async with self._sem:
-            info = self._hit(room_id)  # 双检:排队期间可能已有人拉回
+            info = self._hit(room_id, source)  # 双检:排队期间可能已有人拉回
             if info is not None:
                 return info
             info = await fetch_room(room_id, source=source, timeout=timeout)
-            self._cache[room_id] = (time.monotonic(), info)
+            self._cache[(room_id, source)] = (time.monotonic(), info)
             return info

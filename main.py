@@ -41,6 +41,9 @@ NOTIFY_DEDUP_TTL = 10.0
 # watchdog 检查间隔与新监控启动宽限期（秒）
 WATCHDOG_INTERVAL = 60.0
 WATCHDOG_STARTUP_GRACE = 30.0
+# 实时 rss 缺少房间快照时，仅给快速 open API 富化一个很短的硬期限。
+# 超时后仍立即发送基础文本，避免封面接口拖慢开播通知。
+REALTIME_ENRICH_TIMEOUT = 1.5
 
 # 配置默认值:_conf_schema.json 是 WebUI 载体,这里是运行时兜底
 # (宿主未传 config、或旧宿主不支持 schema 时按默认运行)
@@ -80,6 +83,7 @@ class PendingNotification:
     title: str | None = None
     category: str | None = None
     snapshot_available: bool = False
+    realtime: bool = False
     cover_url: str | None = None  # 构建时填充
 
     def to_record(self) -> dict:
@@ -96,6 +100,7 @@ class PendingNotification:
             "title": self.title,
             "category": self.category,
             "snapshot_available": self.snapshot_available,
+            "realtime": self.realtime,
             "cover_url": self.cover_url,
         }
 
@@ -128,6 +133,7 @@ class PendingNotification:
                     else None
                 ),
                 snapshot_available=bool(record.get("snapshot_available", False)),
+                realtime=bool(record.get("realtime", False)),
                 cover_url=(
                     str(record["cover_url"])
                     if record.get("cover_url") is not None
@@ -518,7 +524,8 @@ class Main(star.Star):
         """在队列侧构建通知文本(首次投递前调用一次)
 
         开播通知按配置富化(标题/分类/封面):外呼走 TTL 缓存 + 并发
-        限制,失败降级为基础文本,不阻塞、不失败。
+        限制。实时 rss 仅等待快速 open API 至多 1.5 秒；失败或超时
+        降级为基础文本，不影响通知发送。
         """
         if item.kind == "live":
             title = category = None
@@ -529,10 +536,29 @@ class Main(star.Star):
                         item.cover_url = None
                 else:
                     try:
-                        info = await self._room_cache.get(item.room_id, timeout=5.0)
+                        source = "open" if item.realtime else "auto"
+                        timeout = REALTIME_ENRICH_TIMEOUT if item.realtime else 5.0
+                        request = self._room_cache.get(
+                            item.room_id,
+                            source=source,
+                            timeout=timeout,
+                        )
+                        info = (
+                            await asyncio.wait_for(
+                                request,
+                                timeout=REALTIME_ENRICH_TIMEOUT,
+                            )
+                            if item.realtime
+                            else await request
+                        )
                         title, category = info.title, info.category
                         if self._cfg("notify_cover"):
                             item.cover_url = info.cover_url
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            f"直播间 {item.room_id} 实时通知富化超过 "
+                            f"{REALTIME_ENRICH_TIMEOUT:.1f}s，降级为基础文本"
+                        )
                     except Exception as e:
                         logger.warning(
                             f"直播间 {item.room_id} 通知富化失败,降级为基础文本: {e}"
@@ -631,10 +657,7 @@ class Main(star.Star):
         }
         snapshot = msg.get("room_info")
         has_snapshot = isinstance(snapshot, dict)
-        # Real-time rss is the latency-sensitive path. If no cached HTTP
-        # snapshot is available, send the basic notification immediately
-        # instead of blocking it on another network request.
-        skip_http_enrichment = msg.get("type") == "rss"
+        realtime = msg.get("type") == "rss"
         if has_snapshot:
             title_value = snapshot.get("title")
             category_value = snapshot.get("category")
@@ -653,7 +676,8 @@ class Main(star.Star):
             event_ts=time.time(),
             title=title,
             category=category,
-            snapshot_available=has_snapshot or skip_http_enrichment,
+            snapshot_available=has_snapshot,
+            realtime=realtime,
             cover_url=cover_url,
         )
         if scheduled:
@@ -683,6 +707,14 @@ class Main(star.Star):
             for umo, config in sub_configs.items()
             if getattr(config, "offline_notify", True)
         }
+        monitor = self.monitors.get(room_id)
+        event_ts = getattr(monitor, "last_offline_time", None)
+        if (
+            isinstance(event_ts, bool)
+            or not isinstance(event_ts, (int, float))
+            or event_ts <= 0
+        ):
+            event_ts = time.time()
 
         scheduled = self._schedule_notification(
             subscriber_settings,
@@ -691,7 +723,7 @@ class Main(star.Star):
             room_id=room_id,
             room_name=room_name,
             duration=duration_seconds,
-            event_ts=time.time(),
+            event_ts=float(event_ts),
         )
         if scheduled:
             logger.info(

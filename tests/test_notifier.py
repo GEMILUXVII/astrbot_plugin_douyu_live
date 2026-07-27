@@ -92,6 +92,28 @@ def test_send_failure_classification():
     assert failed == {"boom", "noplatform"}
 
 
+def test_send_appends_cover_image():
+    captured = []
+
+    class Ctx:
+        async def send_message(self, umo, result):
+            captured.append((umo, result))
+            return True
+
+    n = Notifier(context=Ctx())
+    failed = asyncio.run(
+        n.send_to_subscribers(
+            {"umo": False},
+            "hi",
+            cover_url="https://example.com/cover.jpg",
+        )
+    )
+
+    assert failed == set()
+    assert captured[0][0] == "umo"
+    assert captured[0][1].chain[-1].file == "https://example.com/cover.jpg"
+
+
 def test_send_timeout_counts_as_failed(monkeypatch):
     """挂起的发送按超时计入 failed 走上层退避重试(纵深防御)"""
     import astrbot_plugin_douyu_live.core.notifier as notifier_mod

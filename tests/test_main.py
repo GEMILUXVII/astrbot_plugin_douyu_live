@@ -170,6 +170,7 @@ def test_pending_notification_round_trip():
         title="title",
         category="category",
         snapshot_available=True,
+        realtime=True,
         cover_url="https://example.com/cover.jpg",
     )
     restored = PendingNotification.from_record(item.to_record())
@@ -182,6 +183,7 @@ def test_pending_notification_round_trip():
     assert restored.title == "title"
     assert restored.category == "category"
     assert restored.snapshot_available is True
+    assert restored.realtime is True
     assert restored.next_attempt_at > time.monotonic()
 
 

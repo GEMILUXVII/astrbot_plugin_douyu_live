@@ -11,7 +11,7 @@
 <br>
 
 <div align="center">
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-v2.2.8-9644F4?style=for-the-badge" alt="Version"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-v2.2.9-9644F4?style=for-the-badge" alt="Version"></a>
   <a href="https://github.com/GEMILUXVII/astrbot_plugin_douyu_live/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-E53935?style=for-the-badge" alt="License"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"></a>
   <a href="https://github.com/AstrBotDevs/AstrBot"><img src="https://img.shields.io/badge/AstrBot-Compatible-00BFA5?style=for-the-badge&logo=robot&logoColor=white" alt="AstrBot Compatible"></a>
@@ -42,7 +42,8 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 - **订阅推送**：用户可自主订阅/取消订阅，精准推送到群/私聊
 - **@全体成员**：支持开播时自动 @全体成员（可选）
 - **下播通知**：自动推送下播提醒并附带当次直播时长
-- **实时开播优先**：收到斗鱼开播 `rss` 后立即发送，不让慢速 HTTP 阻塞
+- **实时开播优先**：收到斗鱼开播 `rss` 后仅给快速封面富化 1.5 秒，
+  超时立即降级为基础文本，不让慢速 HTTP 长时间阻塞
 - **抗抖动机制**：实时开播事件直接触发；下播经 HTTP 对账，并配合
   状态冷却和可配置的二次复核（默认 10 秒），避免重复或假下播
 - **断连补偿**：每次弹幕重连后自动用 HTTP 接口对账开播状态，补齐断连
@@ -77,7 +78,7 @@ AstrBot 斗鱼直播通知插件，支持多房间监控、订阅推送、@全�
 2. **重启/重载 AstrBot**
 
    在 WebUI 重载插件，或直接重启 AstrBot。AstrBot 会按
-   `requirements.txt` 从 PyPI 安装 `aiodouyu>=0.4.7,<0.5`，不会从相邻
+   `requirements.txt` 从 PyPI 安装 `aiodouyu>=0.4.8,<0.5`，不会从相邻
    源码目录导入。
 
 ## 命令列表

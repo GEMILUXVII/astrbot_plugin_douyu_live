@@ -6,8 +6,11 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import astrbot_plugin_douyu_live.main as main_module
+import astrbot_plugin_douyu_live.utils.ratelimit as ratelimit_module
 from astrbot_plugin_douyu_live.models.room import RoomInfo
 from astrbot_plugin_douyu_live.models.subscription import SubscriptionConfig
+from astrbot_plugin_douyu_live.utils.ratelimit import RoomInfoCache
 
 
 class FakeEvent:
@@ -123,6 +126,18 @@ def test_offline_filtering(make_main):
     item = m._notification_queue.get_nowait()
     assert set(item.subscriber_settings) == {"umoOn"}
     assert item.kind == "offline" and item.duration == 120.0
+
+
+def test_offline_notification_uses_effective_transition_time(make_main):
+    m = make_main()
+    m.data.add_room(912, RoomInfo(name="N"))
+    m.data.subscribe(912, "umoOn")
+    m.monitors[912] = SimpleNamespace(last_offline_time=1785137484.0)
+
+    m._on_live_end(912, 30.0)
+
+    item = m._notification_queue.get_nowait()
+    assert item.event_ts == 1785137484.0
 
 
 def test_offline_command_toggle(make_main):
@@ -268,22 +283,60 @@ def test_live_notification_reuses_monitor_snapshot(make_main, monkeypatch):
     assert item.cover_url == "https://x/snapshot.jpg"
 
 
-def test_realtime_rss_notification_never_waits_for_enrichment(make_main, monkeypatch):
+def test_realtime_rss_notification_uses_fast_open_enrichment(make_main, monkeypatch):
     m = make_main()
     m.data.add_room(923, RoomInfo(name="主播D"))
     m.data.subscribe(923, "umoE")
+    calls = []
 
-    async def unexpected_get(room_id, **kwargs):
-        raise AssertionError("real-time rss must not wait for HTTP enrichment")
+    async def fake_get(room_id, **kwargs):
+        calls.append((room_id, kwargs))
+        return SimpleNamespace(
+            title="实时标题",
+            category="主机游戏",
+            cover_url="https://x/realtime-cover.jpg",
+        )
 
-    monkeypatch.setattr(m._room_cache, "get", unexpected_get)
+    monkeypatch.setattr(m._room_cache, "get", fake_get)
     m._on_live_start(923, {"type": "rss", "ss": "1", "ivl": "0"})
     item = m._notification_queue.get_nowait()
 
     asyncio.run(m._build_notification_message(item))
 
-    assert item.snapshot_available is True
-    assert "主播D" in item.message
+    assert item.snapshot_available is False
+    assert item.realtime is True
+    assert "主播D" in item.message and "实时标题" in item.message
+    assert item.cover_url == "https://x/realtime-cover.jpg"
+    assert calls == [
+        (
+            923,
+            {
+                "source": "open",
+                "timeout": main_module.REALTIME_ENRICH_TIMEOUT,
+            },
+        )
+    ]
+
+
+def test_realtime_rss_enrichment_timeout_degrades_promptly(make_main, monkeypatch):
+    m = make_main()
+    m.data.add_room(925, RoomInfo(name="主播F"))
+    m.data.subscribe(925, "umoE")
+    monkeypatch.setattr(main_module, "REALTIME_ENRICH_TIMEOUT", 0.02)
+
+    async def slow_get(room_id, **kwargs):
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(m._room_cache, "get", slow_get)
+    m._on_live_start(925, {"type": "rss", "ss": "1", "ivl": "0"})
+    item = m._notification_queue.get_nowait()
+
+    started = time.monotonic()
+    asyncio.run(m._build_notification_message(item))
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.2
+    assert "主播F" in item.message
     assert item.cover_url is None
 
 
@@ -292,10 +345,14 @@ def test_realtime_rss_reaches_plugin_queue_end_to_end(make_main, monkeypatch):
     m.data.add_room(924, RoomInfo(name="主播E"))
     m.data.subscribe(924, "umoE")
 
-    async def unexpected_get(room_id, **kwargs):
-        raise AssertionError("end-to-end rss path must not call HTTP")
+    async def fake_get(room_id, **kwargs):
+        return SimpleNamespace(
+            title="端到端标题",
+            category="端到端分类",
+            cover_url="https://x/end-to-end-cover.jpg",
+        )
 
-    monkeypatch.setattr(m._room_cache, "get", unexpected_get)
+    monkeypatch.setattr(m._room_cache, "get", fake_get)
     monitor = m._new_monitor(924)
 
     monitor._rss_handler({"type": "rss", "rid": "924", "ss": "1", "ivl": "0"})
@@ -305,6 +362,31 @@ def test_realtime_rss_reaches_plugin_queue_end_to_end(make_main, monkeypatch):
     asyncio.run(m._build_notification_message(item))
     assert item.kind == "live"
     assert "主播E" in item.message
+    assert item.cover_url == "https://x/end-to-end-cover.jpg"
+
+
+def test_room_info_cache_separates_sources(monkeypatch):
+    calls = []
+
+    async def fake_fetch_room(room_id, *, source, timeout):
+        calls.append((room_id, source, timeout))
+        return SimpleNamespace(source=source)
+
+    monkeypatch.setattr(ratelimit_module, "fetch_room", fake_fetch_room)
+    cache = RoomInfoCache()
+
+    async def run():
+        open_info = await cache.get(926, source="open", timeout=1.5)
+        auto_info = await cache.get(926, source="auto", timeout=5.0)
+        open_cached = await cache.get(926, source="open", timeout=9.0)
+        return open_info, auto_info, open_cached
+
+    open_info, auto_info, open_cached = asyncio.run(run())
+
+    assert open_info.source == "open"
+    assert auto_info.source == "auto"
+    assert open_cached is open_info
+    assert calls == [(926, "open", 1.5), (926, "auto", 5.0)]
 
 
 # ==================== /douyu live ====================
