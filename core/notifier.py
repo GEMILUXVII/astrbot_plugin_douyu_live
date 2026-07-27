@@ -178,7 +178,12 @@ class Notifier:
                         )
                         failed.add(umo)
                 except Exception as e:
-                    logger.warning(f"斗鱼通知发送失败 ({umo}): {e}")
+                    logger.warning(
+                        "斗鱼通知发送失败 (%s): %s: %r",
+                        umo,
+                        type(e).__name__,
+                        e,
+                    )
                     failed.add(umo)
 
         await asyncio.gather(
