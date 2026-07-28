@@ -2,7 +2,10 @@
 
 import asyncio
 
-from astrbot_plugin_douyu_live.core.notifier import Notifier
+from astrbot_plugin_douyu_live.core.notifier import (
+    Notifier,
+    _upgrade_douyu_cover_url,
+)
 from astrbot_plugin_douyu_live.utils.text import sanitize_display_text
 
 
@@ -92,7 +95,7 @@ def test_send_failure_classification():
     assert failed == {"boom", "noplatform"}
 
 
-def test_send_appends_cover_image():
+def test_send_appends_high_resolution_cover_image():
     captured = []
 
     class Ctx:
@@ -105,13 +108,29 @@ def test_send_appends_cover_image():
         n.send_to_subscribers(
             {"umo": False},
             "hi",
-            cover_url="https://example.com/cover.jpg",
+            cover_url=(
+                "https://rpic.douyucdn.cn/asrpic/260727/"
+                "12725169_src_1218.avif/dy1?token=x#preview"
+            ),
         )
     )
 
     assert failed == set()
     assert captured[0][0] == "umo"
-    assert captured[0][1].chain[-1].file == "https://example.com/cover.jpg"
+    assert captured[0][1].chain[-1].file == (
+        "https://rpic.douyucdn.cn/asrpic/260727/"
+        "12725169_src_1218.avif/dy4?token=x#preview"
+    )
+
+
+def test_cover_upgrade_is_scoped_to_douyu_thumbnails():
+    high_resolution = "https://rpic.douyucdn.cn/cover.jpg/dy4"
+    external = "https://example.com/cover.jpg/dy1"
+    lookalike = "https://rpic.douyucdn.cn.example.com/cover.jpg/dy1"
+
+    assert _upgrade_douyu_cover_url(high_resolution) == high_resolution
+    assert _upgrade_douyu_cover_url(external) == external
+    assert _upgrade_douyu_cover_url(lookalike) == lookalike
 
 
 def test_send_timeout_counts_as_failed(monkeypatch):

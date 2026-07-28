@@ -4,6 +4,7 @@ import asyncio
 import time
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
 
 from astrbot.api import logger
 from astrbot.api.event import MessageEventResult
@@ -29,6 +30,24 @@ SEND_CONCURRENCY = 5
 # 防御,把单个慢/死目标对串行通知队列的队头阻塞压到有界(第三方或
 # 未来适配器的超时行为未知)
 SEND_TIMEOUT = 30.0
+
+
+def _upgrade_douyu_cover_url(url: str) -> str:
+    """Prefer Douyu's high-resolution JPEG rendition when available."""
+    try:
+        parsed = urlsplit(url)
+        hostname = (parsed.hostname or "").lower()
+    except ValueError:
+        return url
+
+    if (
+        parsed.scheme in {"http", "https"}
+        and hostname == "rpic.douyucdn.cn"
+        and parsed.path.endswith("/dy1")
+    ):
+        parsed = parsed._replace(path=f"{parsed.path[:-4]}/dy4")
+        return urlunsplit(parsed)
+    return url
 
 
 class Notifier:
@@ -170,7 +189,9 @@ class Notifier:
                         result.chain.append(Plain("\n"))
                     result.chain.append(Plain(message))
                     if cover_url:
-                        result.chain.append(Image.fromURL(cover_url))
+                        result.chain.append(
+                            Image.fromURL(_upgrade_douyu_cover_url(cover_url))
+                        )
                     ok = await asyncio.wait_for(
                         self.context.send_message(umo, result),
                         timeout=SEND_TIMEOUT,
