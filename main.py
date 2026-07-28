@@ -3,8 +3,6 @@
 支持多房间监控、订阅推送、@全体成员等功能。
 """
 
-from __future__ import annotations
-
 import asyncio
 import time
 from dataclasses import dataclass, field
@@ -105,7 +103,7 @@ class PendingNotification:
         }
 
     @classmethod
-    def from_record(cls, record: dict) -> PendingNotification | None:
+    def from_record(cls, record: dict) -> "PendingNotification | None":
         settings = record.get("subscriber_settings")
         if not isinstance(settings, dict):
             return None

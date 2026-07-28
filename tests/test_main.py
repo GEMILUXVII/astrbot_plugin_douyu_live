@@ -1,6 +1,7 @@
 """Main 插件层：通知队列、去重、开关命令测试"""
 
 import asyncio
+import inspect
 import time
 
 from astrbot_plugin_douyu_live.models.room import RoomInfo
@@ -237,3 +238,24 @@ def test_resolve_toggle(make_main):
         assert err is not None and "不在监控列表" in err
 
     asyncio.run(run())
+
+
+def test_command_annotations_are_runtime_types():
+    """AstrBot relies on raw runtime annotations when converting command arguments."""
+    from astrbot.core.star.filter.command import GreedyStr
+    from astrbot_plugin_douyu_live.main import Main
+
+    room_id_commands = (
+        "douyu_offline",
+        "douyu_add",
+        "douyu_del",
+        "douyu_sub",
+        "douyu_unsub",
+        "douyu_atall",
+    )
+    for command_name in room_id_commands:
+        params = inspect.signature(getattr(Main, command_name)).parameters
+        assert params["room_id"].annotation is int
+
+    add_params = inspect.signature(Main.douyu_add).parameters
+    assert add_params["name"].annotation is GreedyStr
