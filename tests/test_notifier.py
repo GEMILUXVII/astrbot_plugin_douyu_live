@@ -63,7 +63,8 @@ def test_notifications_are_emoji_free():
 def test_offline_duration_formats():
     n = Notifier(context=None)
     assert "未知" in n.build_offline_notification(1, "a", 0)
-    assert "1秒" in n.build_offline_notification(1, "a", 0.1)
+    assert "不到1秒" in n.build_offline_notification(1, "a", 0.1)
+    assert "1秒" in n.build_offline_notification(1, "a", 1)
     assert "42秒" in n.build_offline_notification(1, "a", 41.6)
     assert "60秒" in n.build_offline_notification(1, "a", 59.6)
     assert "45分钟" in n.build_offline_notification(1, "a", 2700)

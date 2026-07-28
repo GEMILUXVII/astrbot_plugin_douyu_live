@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -42,6 +43,20 @@ WATCHDOG_STARTUP_GRACE = 30.0
 # 实时 rss 缺少房间快照时，仅给快速 open API 富化一个很短的硬期限。
 # 超时后仍立即发送基础文本，避免封面接口拖慢开播通知。
 REALTIME_ENRICH_TIMEOUT = 1.5
+
+
+def _effective_event_timestamp(value: object, now: float) -> float:
+    """Return an accepted event timestamp, falling back to the observation time."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return now
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return now
+    if not math.isfinite(timestamp) or timestamp <= 0 or timestamp > now:
+        return now
+    return timestamp
+
 
 # 配置默认值:_conf_schema.json 是 WebUI 载体,这里是运行时兜底
 # (宿主未传 config、或旧宿主不支持 schema 时按默认运行)
@@ -665,13 +680,19 @@ class Main(star.Star):
             cover_url = str(cover_value) if cover_value else None
         else:
             title = category = cover_url = None
+        now = time.time()
+        monitor = self.monitors.get(room_id)
+        event_ts = _effective_event_timestamp(
+            getattr(monitor, "live_start_time", None),
+            now,
+        )
         scheduled = self._schedule_notification(
             subscriber_settings,
             dedup_key=("live", room_id),
             kind="live",
             room_id=room_id,
             room_name=room_name,
-            event_ts=time.time(),
+            event_ts=event_ts,
             title=title,
             category=category,
             snapshot_available=has_snapshot,
@@ -705,14 +726,12 @@ class Main(star.Star):
             for umo, config in sub_configs.items()
             if getattr(config, "offline_notify", True)
         }
+        now = time.time()
         monitor = self.monitors.get(room_id)
-        event_ts = getattr(monitor, "last_offline_time", None)
-        if (
-            isinstance(event_ts, bool)
-            or not isinstance(event_ts, (int, float))
-            or event_ts <= 0
-        ):
-            event_ts = time.time()
+        event_ts = _effective_event_timestamp(
+            getattr(monitor, "last_offline_time", None),
+            now,
+        )
 
         scheduled = self._schedule_notification(
             subscriber_settings,

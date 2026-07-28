@@ -140,6 +140,49 @@ def test_offline_notification_uses_effective_transition_time(make_main):
     assert item.event_ts == 1785137484.0
 
 
+def test_live_notification_uses_monitor_session_start(make_main, monkeypatch):
+    m = make_main()
+    m.data.add_room(913, RoomInfo(name="N"))
+    m.data.subscribe(913, "umoOn")
+    m.monitors[913] = SimpleNamespace(live_start_time=1785137484.25)
+    monkeypatch.setattr(main_module.time, "time", lambda: 1785137490.0)
+
+    m._on_live_start(913, {"type": "rss", "ss": "1", "ivl": "0"})
+
+    item = m._notification_queue.get_nowait()
+    assert item.event_ts == 1785137484.25
+
+
+def test_live_notification_rejects_invalid_monitor_session_start(
+    make_main, monkeypatch
+):
+    invalid_starts = (
+        None,
+        "1785137484",
+        True,
+        float("-inf"),
+        float("nan"),
+        float("inf"),
+        -1.0,
+        0.0,
+        1785137491.0,
+        10**400,
+    )
+    monkeypatch.setattr(main_module.time, "time", lambda: 1785137490.0)
+
+    for index, invalid_start in enumerate(invalid_starts, start=1):
+        room_id = 913 + index
+        m = make_main()
+        m.data.add_room(room_id, RoomInfo(name="N"))
+        m.data.subscribe(room_id, "umoOn")
+        m.monitors[room_id] = SimpleNamespace(live_start_time=invalid_start)
+
+        m._on_live_start(room_id, {"type": "rss", "ss": "1", "ivl": "0"})
+
+        item = m._notification_queue.get_nowait()
+        assert item.event_ts == 1785137490.0
+
+
 def test_offline_command_toggle(make_main):
     m = make_main()
     m.data.add_room(911, RoomInfo(name="N"))

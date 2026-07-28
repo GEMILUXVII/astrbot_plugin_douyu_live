@@ -134,8 +134,10 @@ class Notifier:
 
         # 计算时长
         if duration_seconds > 0:
-            if duration_seconds < 60:
-                seconds = max(1, round(duration_seconds))
+            if duration_seconds < 1:
+                duration_str = "不到1秒"
+            elif duration_seconds < 60:
+                seconds = round(duration_seconds)
                 duration_str = f"{seconds}秒"
             else:
                 hours = int(duration_seconds // 3600)
