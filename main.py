@@ -42,7 +42,7 @@ WATCHDOG_INTERVAL = 60.0
 WATCHDOG_STARTUP_GRACE = 30.0
 # 实时 rss 缺少房间快照时，仅给快速 open API 富化一个很短的硬期限。
 # 超时后仍立即发送基础文本，避免封面接口拖慢开播通知。
-REALTIME_ENRICH_TIMEOUT = 1.5
+REALTIME_ENRICH_TIMEOUT = 3.0
 
 
 def _effective_event_timestamp(value: object, now: float) -> float:
@@ -537,7 +537,7 @@ class Main(star.Star):
         """在队列侧构建通知文本(首次投递前调用一次)
 
         开播通知按配置富化(标题/分类/封面):外呼走 TTL 缓存 + 并发
-        限制。实时 rss 仅等待快速 open API 至多 1.5 秒；失败或超时
+        限制。实时 rss 仅等待快速 open API 至多 3 秒；失败或超时
         降级为基础文本，不影响通知发送。
         """
         if item.kind == "live":
